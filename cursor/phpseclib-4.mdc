@@ -8,6 +8,8 @@ alwaysApply: false
 
 When working with phpseclib in this project, follow these rules.
 
+Targets **phpseclib 4.0.0**. phpseclib uses [Romantic Versioning](https://github.com/romversioning/romver); breaking changes are reserved for MAJOR or PROJECT bumps, not 4.0.x minor releases. New features may land in 4.0.x (OCSP support is one possibility — adding methods isn't a BC break). The `Signable` interface exists across all 4.0.x but its method list may shift. `Constructed` behaviors documented in this rule are stable; lower-level implementation details aren't. If a 4.0.x release contradicts this rule, defer to the library.
+
 ## Namespace
 
 phpseclib 4.0 uses the `phpseclib4\` root namespace. Every class, interface, and exception lives under it: `phpseclib4\Crypt\RSA`, `phpseclib4\File\X509`, `phpseclib4\File\ASN1\Constructed`, `phpseclib4\Math\BigInteger`, `phpseclib4\Exception\PasswordNeededException`. Code under `phpseclib3\` is 3.0 and needs migration. Code with `Crypt_RSA` / `File_X509` / `Net_SSH2` is 1.0 or 2.0.

@@ -11,6 +11,20 @@ This skill teaches Claude how to write idiomatic phpseclib 4.0 code and how to m
 
 phpseclib 4.0 uses the **`phpseclib4\`** root namespace. Every class, interface, and exception lives under it: `phpseclib4\Crypt\RSA`, `phpseclib4\File\X509`, `phpseclib4\File\ASN1\Constructed`, `phpseclib4\Math\BigInteger`, `phpseclib4\Exception\PasswordNeededException`, and so on. If you see `phpseclib3\` in code, it is 3.0 — see the migration section.
 
+## Which version of 4 this skill targets
+
+This skill is written against **phpseclib 4.0.0**. Public API surface — class names, method names, signatures, behaviors of `getSubjectDN()` / `validateSignature()` / `setCRLLookupCallback()` / etc. — is stable across all 4.0.x releases and will match what's documented here. phpseclib follows [Romantic Versioning (RomVer)](https://github.com/romversioning/romver) (PROJECT.MAJOR.MINOR); incompatible API changes are reserved for MAJOR or PROJECT bumps, not 4.0.x minor releases.
+
+Three categories of things that *may* change between 4.0.x minor releases without contradicting BC:
+
+1. **New features may land.** OCSP support, additional algorithms, additional helpers — adding methods or classes isn't a BC break. If a later 4.0.x release supports something this skill says isn't supported, the skill is just out of date.
+2. **Method signatures inside the `Signable` interface may shift.** That the interface *exists* is stable (it's foundational to the signing model these docs describe). Which methods it requires of implementers may evolve — for example, `copySigningX509Attributes` might be generalized, or a `Signable` might gain a method to identify itself. If you implement `Signable` on your own type and a future 4.0.x reshapes the contract, your implementation may need updating.
+3. **Constructed and ASN.1 internals may be refactored.** The behaviors documented in `references/asn1-constructed.md` (the rules mechanism, lazy decoding, the typed-object hierarchy as it appears to callers) are stable in 4.0.x. Lower-level implementation details — internal cache management, boilerplate-reduction refactors, whitelist mechanics — are not. If you're walking the structure with documented mechanisms (ArrayAccess, `decodeBER`/`map`, `$rules` callbacks, the typed-object classes), you're safe. If you're reaching into private state via reflection or relying on subtle implementation behavior, you own that.
+
+The rule of thumb: anything covered in the references is the contract. If it's not in the references, treat it as an implementation detail.
+
+If you find a 4.0.x release does something the skill doesn't describe, default to the library's behavior, not the skill's description.
+
 ## When this skill applies
 
 Use it whenever the user is:
@@ -173,7 +187,7 @@ If subject ≠ issuer and the code calls `getDN()`, `setDN()`, `addDNProp()`, et
 
 CSR objects only have a subject DN, so `getDN()` and `getSubjectDN()` are aliases. CRL objects only have an issuer DN, so `getDN()` and `getIssuerDN()` are aliases. The `setDN()` family follows the same rules.
 
-DN return formats are controlled by an `ASN1::DN_*` constant: `DN_STRING` (default, OpenSSL 3.0 CLI-style string like `C = US, O = Acme, CN = example.com`), `DN_ARRAY` (phpseclib internal shape), `DN_OPENSSL` (mirrors `openssl_x509_parse()`), `DN_ASN1` (binary), `DN_CANON` (canonicalized binary).
+DN return formats are controlled by an `ASN1::DN_*` constant: `DN_STRING` (default, OpenSSL 3.0 CLI-style string like `C = US, O = Acme, CN = example.com`), `DN_ARRAY` (phpseclib internal shape), `DN_OPENSSL` (mirrors `openssl_x509_parse()`), `DN_ASN1` (binary), `DN_CANON` (canonicalized binary), `DN_HASH` (hex of `SHA1(DN_CANON)`, matches OpenSSL's `subject_hash`).
 
 **The `DN_STRING` format changed between 3.0 and 4.0.** 3.0 produced `C=US, O=Acme/CN=example.com` (using `/` as both a separator and a legal value character); 4.0 produces `C = US, O = Acme, CN = example.com` (the OpenSSL 3.0 CLI format, which uses `, ` as the separator and escapes embedded commas). Migrating code that *string-matches* `getDN()` output will silently produce wrong results — recommend `getSubjectDNProps('CN')` or `getSubjectDN(ASN1::DN_OPENSSL)` for stable structured access instead.
 

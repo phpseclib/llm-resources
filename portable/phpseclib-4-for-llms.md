@@ -4,6 +4,8 @@ A single-file reference for AI coding assistants (and humans) that need to write
 
 If your assistant produces phpseclib code that contradicts this document, the document wins.
 
+This document targets **phpseclib 4.0.0**. The public API (class names, method names, signatures, behaviors) is stable across all 4.0.x minor releases; phpseclib uses [Romantic Versioning](https://github.com/romversioning/romver), and breaking changes are reserved for MAJOR or PROJECT bumps. New features may arrive in 4.0.x (OCSP support, additional algorithms — adding methods isn't a BC break). The `Signable` interface exists across all 4.0.x but its specific method list may shift between minor releases. Behaviors of `Constructed` and the ASN.1 layer that are documented in this file are stable; lower-level implementation details aren't. If a later 4.0.x does something this document doesn't describe, defer to the library.
+
 ---
 
 ## At a glance
@@ -195,7 +197,7 @@ The bare `getDN()` / `setDN()` / `addDNProp()` / `removeDNProps()` family only w
 
 CSR objects only have a subject DN — the bare and `Subject` methods are aliases. CRL objects only have an issuer DN — the bare and `Issuer` methods are aliases.
 
-DN return formats are controlled by an `ASN1::DN_*` constant: `DN_STRING` (default, OpenSSL 3.0 CLI format — e.g. `C = US, O = Acme, CN = example.com`), `DN_ARRAY` (phpseclib internal shape), `DN_OPENSSL` (mirrors `openssl_x509_parse()`), `DN_ASN1` (binary), `DN_CANON` (canonicalized binary).
+DN return formats are controlled by an `ASN1::DN_*` constant: `DN_STRING` (default, OpenSSL 3.0 CLI format — e.g. `C = US, O = Acme, CN = example.com`), `DN_ARRAY` (phpseclib internal shape), `DN_OPENSSL` (mirrors `openssl_x509_parse()`), `DN_ASN1` (binary), `DN_CANON` (canonicalized binary), `DN_HASH` (hex of `SHA1(DN_CANON)`, matches OpenSSL's `subject_hash`).
 
 **`DN_STRING` format changed in 4.0.** 3.0 produced `C=US, O=Acme/CN=example.com` (`/` was both separator and a legal value character — ambiguous); 4.0 produces `C = US, O = Acme, CN = example.com`. 3.0 code that string-matches `getDN()` output (`strpos`, regexes, etc.) silently breaks. Use `getSubjectDNProps('CN')` for an array of values, or `getSubjectDN(ASN1::DN_OPENSSL)` for a structured associative array.
 

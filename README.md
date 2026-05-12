@@ -55,6 +55,22 @@ A few things worth being explicit about:
 
 **You may not need to migrate.** [`phpseclib/phpseclib3_compat`](https://github.com/phpseclib/phpseclib3_compat) emulates the entire `phpseclib3\` API on top of phpseclib 4.0, so existing 3.0 code can keep working while the underlying library is upgraded. It also "provides" `phpseclib/phpseclib:~3.0` to Composer, which means it satisfies dependencies that pin to 3.0 (Google's PHP API client, for example). For many projects — especially ones with substantial X.509 code — installing the compat shim is faster, safer, and just as functional as a full rewrite. The skill, the Cursor rule, and the portable guide all surface this option before recommending a migration.
 
+## What version of phpseclib 4 this targets
+
+These resources are written against **phpseclib 4.0.0**. They cover what's stable in that release: the public class names, method names, signatures, and behaviors that 4.0.0 commits to. Those won't change in any 4.0.x minor release — `setCRLLookupCallback` will keep that name; `getSubjectDN()` will keep returning the same shapes; `validateSignature()` will keep the same semantics.
+
+phpseclib follows [Romantic Versioning (RomVer)](https://github.com/romversioning/romver) — `PROJECT.MAJOR.MINOR`. Breaking changes are reserved for MAJOR or PROJECT increments, not minor releases. So when this section says "4.0.x," it means the entire `4.0.*` lineage; any breaking change would arrive in 4.1.0 (a MAJOR bump within the 4.x project) or 5.0.0 (a new PROJECT, indicating a paradigm shift on the scale of the 3.0 → 4.0 transition).
+
+Three things to keep in mind about 4.0.x minor releases:
+
+- **New features may land in minor releases.** OCSP support, additional algorithms, additional helpers — adding methods or classes isn't a BC break. If you read here that something isn't supported and a later release supports it, the resources are just out of date.
+- **The `Signable` interface is stable in concept; its method list is not.** That `Signable` exists, and that `PrivateKey`-or-`PFX`-signs-`Signable` is the 4.0 signing model, is foundational and won't change. The specific method signatures inside the interface (`getSignableSection`, `setSignature`, `identifySignatureAlgorithm`, `copySigningX509Attributes`) may evolve — if you implement `Signable` on your own type, a future 4.0.x reshape could require updates.
+- **`Constructed` and ASN.1 internals are partly settled and partly not.** Everything covered in the references is the contract: the rules mechanism, lazy decoding, ArrayAccess semantics, the typed-object hierarchy as callers see it. Internal implementation details that aren't in the references — boilerplate-reduction refactors in the wrapping classes, internal cache mechanics, whitelist details — are not. The rule of thumb: if the references describe a behavior, you can rely on it across all 4.0.x; if not, treat it as an implementation detail.
+
+The resources here aren't on a scheduled refresh cycle. They exist to help LLMs hit the ground running with 4.0.0; they may or may not be updated as 4.0.x progresses. If you're on a later 4.0.x and notice the resources describe something that doesn't match the library, the library is right.
+
+See [`docs/VERSIONING.md`](https://github.com/phpseclib/phpseclib/blob/master/docs/VERSIONING.md) in the main phpseclib repository for the full versioning and breaking-change policy.
+
 ## Reporting issues
 
 If your AI assistant generates phpseclib code that doesn't work, the most useful thing you can do is open an issue with:

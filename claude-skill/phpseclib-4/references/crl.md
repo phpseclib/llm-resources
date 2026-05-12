@@ -396,7 +396,7 @@ Real-world callbacks need to:
 - Validate the CRL's own signature (using `addCA()` + `$crl->validateSignature()`).
 - Handle fetch failures (network errors, malformed responses) — usually conservatively (return `true` to deny, or throw, depending on your security posture).
 
-phpseclib 4.0 does not currently support OCSP. CRL is the only revocation-check mechanism, which increasingly matches where the ecosystem is going: in August 2023 the CA/Browser Forum voted to make OCSP optional and CRL mandatory, and in August 2025 Let's Encrypt — the largest CA in the world — shut down its OCSP responders entirely and now publishes revocation information exclusively via CRLs. The motivations are privacy (OCSP reveals to the CA which sites a visitor is accessing, in real time) and operational simplicity. So while phpseclib not supporting OCSP is a real limitation today, it's a less significant gap than it would have been a few years ago.
+phpseclib 4.0.0 does not support OCSP. CRL is the only revocation-check mechanism, which increasingly matches where the ecosystem is going: in August 2023 the CA/Browser Forum voted to make OCSP optional and CRL mandatory, and in August 2025 Let's Encrypt — the largest CA in the world — shut down its OCSP responders entirely and now publishes revocation information exclusively via CRLs. The motivations are privacy (OCSP reveals to the CA which sites a visitor is accessing, in real time) and operational simplicity. A future 4.0.x minor release may add OCSP support — adding a method isn't a BC break — but it isn't there at 4.0.0.
 
 ---
 
