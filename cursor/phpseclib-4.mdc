@@ -1,0 +1,272 @@
+---
+description: phpseclib 4.0 — idioms for new code and 3.0 → 4.0 migration patterns. Activates on PHP files that import or call phpseclib classes (X509, CSR, CRL, PFX, SPKAC, CMS, SSH2, SFTP, RSA, EC, DSA, ASN1) or reference the compat packages phpseclib3_compat / phpseclib2_compat.
+globs: ["**/*.php"]
+alwaysApply: false
+---
+
+# phpseclib 4.0
+
+When working with phpseclib in this project, follow these rules.
+
+## Namespace
+
+phpseclib 4.0 uses the `phpseclib4\` root namespace. Every class, interface, and exception lives under it: `phpseclib4\Crypt\RSA`, `phpseclib4\File\X509`, `phpseclib4\File\ASN1\Constructed`, `phpseclib4\Math\BigInteger`, `phpseclib4\Exception\PasswordNeededException`. Code under `phpseclib3\` is 3.0 and needs migration. Code with `Crypt_RSA` / `File_X509` / `Net_SSH2` is 1.0 or 2.0.
+
+## Version-detection signals
+
+Scan pasted code before changing it:
+
+- `Crypt_RSA`, `File_X509`, `Net_SSH2` (underscores, no namespace) → 1.0 or 2.0
+- `phpseclib\Crypt\RSA` (single segment) → 2.0
+- `phpseclib3\Crypt\RSA`, `new X509(); $x509->loadX509(...)` → 3.0
+- `phpseclib4\…`, `X509::load(...)`, `$private->sign($x509)`, `ArrayAccess` on file objects → 4.x
+
+Mixed namespace and method signals = partly-migrated 4.x. Finish the migration; don't pretend it's intact.
+
+## Compat shim — before suggesting a rewrite
+
+`phpseclib/phpseclib3_compat` emulates the full `phpseclib3\` API on top of phpseclib 4.0 and "provides" `phpseclib/phpseclib:~3.0` in Composer. For many 3.0 codebases this is the right answer — installing the shim is faster than rewriting and resolves Composer conflicts with packages that pin to 3.0 (e.g., Google's PHP API client). When a user with a 3.0 codebase asks for help "upgrading to 4.0," surface this option before charging into a rewrite. Native 4.0 code can coexist with shim-emulated 3.0 code in the same project. The migration patterns below apply only when the user has chosen to rewrite against native 4.0.
+
+## Core idioms
+
+### Loading vs. constructing
+
+```php
+use phpseclib4\File\X509;
+use phpseclib4\File\CSR;
+use phpseclib4\File\CRL;
+use phpseclib4\File\PFX;
+use phpseclib4\File\SPKAC;
+use phpseclib4\File\CMS;
+
+$x509 = X509::load(file_get_contents('cert.pem'));   // parse existing
+$x509 = new X509();                                    // build from scratch
+```
+
+`::load()` is for parsing existing data. `new ClassName()` is for building from scratch. There is no `loadX509()` / `loadCSR()` / `loadCRL()` method in 4.0.
+
+### Signing direction: key signs object
+
+```php
+$privKey->sign($x509);    // installs signature into $x509; returns raw signature bytes
+echo $x509;               // the full PEM-encoded signed cert
+
+// Same pattern with PFX (auto-sets issuer DN + AKI from PFX's CA cert):
+$pfx->sign($x509);
+echo $x509;
+```
+
+The interface: `interface PrivateKey { public function sign(string|Signable $message): string; }`. `sign()` always returns a string (the raw signature). When `$message` is a `Signable` (`X509`, `CSR`, `CRL`, `CMS\SignedData`, `CMS\SignedData\Signer`), the key additionally installs the signature back into the object as a side effect.
+
+**String mode still works in 4.0.** `$privKey->sign('raw bytes')` returns a signature over those bytes, same as 3.0. The Signable overload is additive; existing 3.0 raw-byte signing code does not need to be rewritten.
+
+`PrivateKey` is implemented by `EC\PrivateKey`, `RSA\PrivateKey`, `DSA\PrivateKey`, and `System\SSH\Agent\Identity` — agent-held keys can sign certs the same way in-memory keys can.
+
+`$privKey->sign(...)` and `$pfx->sign(...)` do two things in one call: install the signature into the passed object *and* return the raw signature bytes. Use `$priv->sign($x); echo $x;` for the full signed structure (most common). Capture the return value only when you specifically need the bare signature bytes for a separate transmission. **Never write `echo $priv->sign($x509);` expecting a PEM cert** — that prints raw signature bytes.
+
+`X509`, `CSR`, `CRL`, `CMS\SignedData`, and `CMS\SignedData\Signer` implement a `Signable` interface (`phpseclib4\File\Common\Signable`); the signing key consults it to find what bytes to sign inside the structure and where the resulting signature belongs. Without this, callers would have to write their own substr-and-splice logic. PFX signs by delegating to the private key it contains.
+
+Sign **last**, after every DN, extension, and date is set. Modifications after signing leave the signature stale — phpseclib does not auto-resign. The signing call should be the last thing before serializing the object (echo, file_put_contents, DB write, etc.).
+
+Never write `$x509->sign(...)` — the method lives on the signer, not the signee.
+
+### File objects are ArrayAccess wrappers around `ASN1\Constructed`
+
+`X509`, `CSR`, `CRL`, `PFX`, `SPKAC`, and the `CMS\*` subclasses all implement `ArrayAccess`, `Countable`, and `Iterator`.
+
+```php
+$key = $x509->getPublicKey();                            // helper
+$key = $x509['tbsCertificate']['subjectPublicKeyInfo'];  // same typed PublicKey
+print_r($x509);                                          // tree view via __debugInfo()
+```
+
+Both access paths return the same typed objects — `X509::load()` registers `$rules` with `ASN1::map()` that pre-decode each field. The helpers are thin checkers that throw if a slot didn't decode as expected. When a helper would throw, ArrayAccess returns a `Constructed` for that slot; call `->getEncoded()` on it to get the raw bytes.
+
+### DN methods split into Subject and Issuer
+
+```php
+$x509->getSubjectDN();   // always safe
+$x509->getIssuerDN();    // always safe
+$x509->getDN();          // throws if subject != issuer
+```
+
+The bare `getDN()` / `setDN()` / `addDNProp()` / `removeDNProps()` family throws on CA-signed certs. Always use the explicit `Subject*` / `Issuer*` variants in code that handles arbitrary certificates. Same rule applies to setters.
+
+CSR has only a subject DN; CRL has only an issuer DN; in those classes the bare and explicit methods are aliases.
+
+### Extensions return `{extnId, extnValue, critical}` arrays
+
+```php
+$ext = $x509->getExtension('id-ce-cRLDistributionPoints');  // null if missing
+// $ext['extnId']    => string, e.g. 'id-ce-cRLDistributionPoints'
+// $ext['extnValue'] => phpseclib4\File\ASN1\Types\BaseType instance
+// $ext['critical']  => bool
+```
+
+`hasExtension($name)` for boolean tests. `setExtension($name, $value, $critical = null)` to set. Pass either symbolic name or dotted OID.
+
+Specialized helpers exist for common extensions — prefer them: `addDomains()`, `addIPAddresses()` (subjectAltName), `setSubjectKeyIdentifier()` / `createSubjectKeyIdentifier()`, `setAuthorityKeyIdentifier()`, `makeCA()`.
+
+### PFX (PKCS12) — new in 4.0
+
+PFX is new as of 4.0; no equivalent class existed in 3.0. There is no migration path — treat it like CMS, purely a 4.0 topic.
+
+```php
+$pfx = new PFX();
+$pfx->add($privateKey);
+$pfx->add($x509, friendlyName: 'whatever');
+$pfx->setPassword('password');
+echo $pfx;   // binary DER
+
+$pfx = PFX::load($bytes, 'password');
+$pfx->sign($x509);   // signs as a CA, copies issuer DN + AKI
+```
+
+Encrypted PFX without password throws `phpseclib4\Exception\PasswordNeededException`.
+
+### CMS — new in 4.0
+
+`CMS::load()` returns one of `CMS\SignedData`, `CMS\EncryptedData`, `CMS\DigestedData`, `CMS\CompressedData` depending on the parsed `contentType`. Always `instanceof`-check before calling subclass-specific methods.
+
+```php
+$cms = CMS::load(file_get_contents('sample.p7m'));
+if ($cms instanceof CMS\SignedData) {
+    foreach ($cms->getSigners() as $signer) { ... }
+}
+
+// Detached signature over a large file: pass a resource, not a string
+$fp = fopen('big.pdf', 'r');
+$cms = new CMS\SignedData($fp);
+$pfx->sign($cms);
+```
+
+`findSigner($x509)` and `Signer::getCertificate()` enforce a `keyUsage` check — if neither `digitalSignature` nor `nonRepudiation` is set, they fail to match. Disable with `X509::ignoreKeyUsage()` if needed.
+
+CMS did not exist in 3.0. There is no migration path from 3.0 CMS code; it was never there.
+
+### Validation
+
+```php
+X509::addCA(file_get_contents('ca.pem'));   // call 1+ times
+$x509 = X509::load($cert);
+$x509->validateSignature();                  // includes revocation check
+$x509->validateURL('https://example.com/');
+```
+
+Knobs (all static): `setTargetValidationDate()`, `setRecurLimit()`, `disableURLFetch()`, `ignoreKeyUsage()`, `ignoreBasicConstraints()`, `setCRLLookupCallback()`.
+
+## Library-wide changes from 3.0
+
+### Type declarations + exceptions everywhere
+
+Every method has typed parameters and return types. Wrong types → `TypeError` at the call site, regardless of `declare(strict_types=1)`.
+
+3.0 methods often returned `false` on failure. 4.0 methods throw — usually `phpseclib4\Exception\*` types. Replace `if ($x === false)` checks with `try`/`catch`. The classic 3.0 footgun (`$sftp->login(...)` silently returns `false`, then `$sftp->put(...)` silently fails in a loop) now throws on the failed login.
+
+In 3.0, uninitialized values were often `false`; in 4.0 they're typed `?T` and initialized to `null`. Update `=== false` checks against properties to `!isset()` or `=== null`.
+
+**SFTP recursive operations are the deliberate exception** — they collect per-step errors and continue. Use `SFTP::getErrors()` (4.0 only) to inspect them after a recursive `delete()` / `chmod()` / etc.
+
+### SFTP::chmod argument order swapped
+
+```php
+// 3.0: value first
+$sftp->chmod(0777, 'file.txt');
+$sftp->chmod(0777, 'dir', true);   // recursive
+
+// 4.0: path first (matches every other SFTP method)
+$sftp->chmod('file.txt', 0777);
+$sftp->chmod('dir', 0777, true);
+```
+
+Only `chmod` swapped. `chown`, `chgrp`, `touch`, `truncate`, `put`, `get` were already path-first. A 3.0-style call against 4.0 throws `TypeError` immediately on the `string $path` parameter — easy to spot but easy to miss in lightly-tested paths. Grep migrated codebases for `chmod(`.
+
+### Removed methods
+
+| Removed | Replacement |
+| --- | --- |
+| `SSH2::getErrors()`, `SSH2::getLastError()` | exceptions |
+| `SFTP::getSFTPErrors()`, `SFTP::getLastSFTPError()` | exceptions; `SFTP::getErrors()` for recursive ops only |
+| `phpseclib3\Crypt\Random`, `Random::string($n)` | `random_bytes($n)` |
+
+`SFTP::getErrors()` exists in 4.0 but means something different than 3.0's `getSFTPErrors()` — it's only for the recursive-error case.
+
+## Migration patterns
+
+```php
+// === Loading ===
+// 3.0
+$x509 = new X509(); $x509->loadX509(file_get_contents('cert.pem'));
+// 4.0
+$x509 = X509::load(file_get_contents('cert.pem'));
+
+// === Signing ===
+// 3.0: needs three X509 instances. Private key is attached to $issuer
+// out-of-band via setPrivateKey() and never appears as a direct argument.
+// sign() is called on a third X509 and returns an array; saveX509() renders
+// it to PEM.
+$subject = new X509(); $subject->setPublicKey($pubKey); $subject->setDN('/O=demo subject');
+$issuer = new X509(); $issuer->setPrivateKey($privKey); $issuer->setDN('/O=demo issuer');
+$x509 = new X509(); $result = $x509->sign($issuer, $subject); echo $x509->saveX509($result);
+// 4.0: one X509 with explicit subject + issuer DNs; key installs the
+// signature into $x509 (and returns raw signature bytes; ignore here).
+$x509 = new X509($pubKey);
+$x509->setSubjectDN('/O=demo subject'); $x509->setIssuerDN('/O=demo issuer');
+$privKey->sign($x509); echo $x509;
+
+// === DN access ===
+// 3.0
+$dn = $x509->getDN();
+// 4.0 (use explicit variant for any non-self-signed cert)
+$dn = $x509->getSubjectDN();
+
+// === Extension access ===
+// 3.0: returned bare value
+// 4.0: returns ['extnId' => ..., 'extnValue' => ..., 'critical' => ...] or null
+$value = $x509->getExtension('id-ce-keyUsage')['extnValue'];
+
+// === Random bytes ===
+// 3.0
+$bytes = Random::string(32);
+// 4.0
+$bytes = random_bytes(32);
+
+// === SFTP chmod ===
+// 3.0
+$sftp->chmod(0777, 'file.txt');
+// 4.0
+$sftp->chmod('file.txt', 0777);
+
+// === SFTP error checking ===
+// 3.0: poll after the fact
+$sftp->login('u', 'p'); if ($sftp->getSFTPErrors()) { ... }
+// 4.0: exceptions
+try { $sftp->login('u', 'p'); ... } catch (\Throwable $e) { ... }
+```
+
+CRL, SPKAC: in 3.0 these were partially handled inside `X509` (e.g., `$x509->loadCRL()`, `$x509->loadSPKAC()`). In 4.0 each is its own class with its own `::load()` and its own helpers — update imports and call sites accordingly.
+
+PFX, CMS: brand new in 4.0; no 3.0 equivalent. If 3.0 code does PKCS12 or CMS work it's via `openssl_*` or shell-out to the `openssl` CLI — moving that into the new classes is a refactor, not a mechanical rename.
+
+## Common mistakes to flag in review
+
+1. **`$sftp->chmod(0777, $path)`** — wrong order; will throw TypeError. Should be `$sftp->chmod($path, 0777)`.
+2. **`if ($result === false)` after a phpseclib call** — 4.0 throws instead of returning false. Use try/catch.
+3. **`getSFTPErrors()` / `getLastSFTPError()` / `SSH2::getErrors()` / `SSH2::getLastError()`** — all removed. Rewrite around exceptions.
+4. **New namespace, old method names** — `phpseclib4\File\X509::load()` followed by `$x509->loadX509(...)` is a half-migration. The second call is dead.
+5. **`getDN()` / `setDN()` on a CA-signed cert** — throws. Use `Subject*` / `Issuer*` variants.
+6. **Configuring after signing** — `$private->sign($x509); $x509->setExtension(...)` produces a stale signature. Configure first, sign last.
+7. **Treating `getExtension()` return value as the value** — it's an array; pull `$ext['extnValue']`.
+8. **`getPublicKey()` on untrusted input without try/catch** — throws `phpseclib4\Exception\UnexpectedValueException` on unsupported formats. Guard with `hasPublicKey()` or catch. Note: `catch (\UnexpectedValueException $e)` (the SPL class) will NOT catch phpseclib's same-named class. Use `\phpseclib4\Exception\UnexpectedValueException` or the broader `\RuntimeException` (every phpseclib exception extends it).
+9. **`$x509->sign(...)`** — sign method is on the signer (key or PFX), not the signee.
+10. **`echo $privKey->sign($x509)`** — `sign()` returns raw signature bytes, not the cert. Use `$privKey->sign($x509); echo $x509;` to get the PEM.
+11. **Building PKCS12 by hand or via OpenSSL shellouts** in 4.0 — use the `PFX` class (new in 4.0).
+12. **`phpseclib4\Crypt\Random` or `Random::string()`** — does not exist; use `random_bytes()`.
+13. **String-matching `getDN()` output** — `DN_STRING` format changed between 3.0 (`C=US, O=Acme/CN=…`) and 4.0 (`C = US, O = Acme, CN = …`). Use `getSubjectDNProps('CN')` or `getSubjectDN(ASN1::DN_OPENSSL)` for structured access.
+
+## Style preferences
+
+- `use` statements at the top; no inline FQCNs.
+- Named arguments for non-obvious optional parameters: `$pfx->add($x509, friendlyName: '...')`.
+- Default to `EC::createKey('nistp256')` for new keys unless RSA is specifically required.
+- For new certificates, call `X509::addCA(...)` before any `validateSignature()` to avoid spurious "untrusted issuer" failures.
