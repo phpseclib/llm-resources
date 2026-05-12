@@ -206,6 +206,73 @@ public function hasMapping(): bool
 
 `offsetGet` returns by reference — so `$constructed['child']['grandchild'] = $value` works the way you'd expect on a real array. The reference is to the slot in the decoded `$decoded` array.
 
+### Autovivification on read
+
+`offsetGet` on a missing key does *not* throw and does *not* return `null`. It creates an empty array at that slot and returns it — [autovivification](https://en.wikipedia.org/wiki/Autovivification), the same behavior PHP gives you with arrays-of-arrays when you assign into a deep path.
+
+```php
+$crl = new CRL();
+var_dump($crl['zzz']);
+// array(0) { }    ← not null, not an exception
+```
+
+This is deliberate: autovivification is what makes `$x509['tbsCertificate']['subject']['rdnSequence'][0][0] = [...]` work as a write path without callers having to manually pre-create every intermediate level. The same `offsetGet` that supports reads is what writes pass through, so it has to create the slot.
+
+There's a subtlety with the encoded-bytes cache. The autovivified slot lives in the decoded array, but when the Constructed re-encodes itself (during `getEncoded()`, `toString()`, or anything that compiles the structure), empty slots get dropped:
+
+```php
+$crl = new CRL();
+$tmp = $crl['zzz'];          // autovivifies 'zzz' = []
+print_r($crl);                // 'zzz' visible in the live decoded view
+echo $crl;                    // re-encodes; the empty slot is silently dropped
+print_r($crl);                // 'zzz' is gone
+```
+
+You only really notice if you take a *reference* to an intermediate node before the compile-away happens — references bypass the compile path and show the raw decoded state, autovivified slots and all:
+
+```php
+$crl = new CRL();
+$copy = &$crl['tbsCertList'];
+$x = $crl['tbsCertList']['zzz'];  // autovivifies 'zzz' inside tbsCertList
+print_r($copy);                    // shows 'zzz' = [] (bypasses compile)
+```
+
+#### Testing whether an optional field is present
+
+The autovivification trap fires when you access a slot directly via `offsetGet`:
+
+```php
+$nextUpdate = $crl['tbsCertList']['nextUpdate'];   // ← if missing, autovivifies to []
+```
+
+But many PHP constructs that *look* like they're calling `offsetGet` actually go through `offsetExists` first, which doesn't autovivify (`Constructed::offsetExists` just checks `isset($this->decoded[$offset])` without creating anything). So the idiomatic PHP tests work cleanly:
+
+```php
+// All of these route through offsetExists for the missing case — no autovivification:
+if (isset($crl['tbsCertList']['nextUpdate']))   { /* ... */ }
+$nextUpdate = $crl['tbsCertList']['nextUpdate'] ?? null;
+if (!empty($crl['tbsCertList']['nextUpdate']))   { /* ... */ }
+```
+
+`??` is the cleanest for "get the value or null." `isset()` is fine for boolean tests. `empty()` works for boolean tests too, but if the key *does* exist it'll also call `offsetGet` to test the value for falsiness, so it's only equivalent to `!isset()` in the missing-key case.
+
+#### When you *do* need to avoid the trap
+
+The trap fires for raw direct access without any wrapping:
+
+```php
+$nextUpdate = $crl['tbsCertList']['nextUpdate'];  // missing → autovivifies, returns []
+if ($nextUpdate) { ... }                          // truthy test, but slot is now in the structure
+```
+
+If you need the value and want to handle "missing" cleanly without autovivifying, `??` is the right tool:
+
+```php
+$nextUpdate = $crl['tbsCertList']['nextUpdate'] ?? null;
+```
+
+Or for fields that have dedicated helpers (extensions, DN properties, etc.), prefer those — they know how to give you a clean present/absent answer.
+
 ### `decodeCurrent`
 
 This is the heart of the class. Triggered by any access method. Walks `$this->encoded` against `$this->mapping`, produces a name-keyed array of children, caches the result on `$this->decoded`. Subsequent accesses skip straight to the cached array.

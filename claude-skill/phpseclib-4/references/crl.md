@@ -407,11 +407,13 @@ CRL implements `ArrayAccess`, `Countable`, and `Iterator` with the same lazy-dec
 ```php
 $tbs        = $crl['tbsCertList'];
 $issuer     = $crl['tbsCertList']['issuer'];
-$thisUpdate = $crl['tbsCertList']['thisUpdate'];        // DateTimeInterface
-$nextUpdate = $crl['tbsCertList']['nextUpdate'] ?? null;
+$thisUpdate = $crl['tbsCertList']['thisUpdate'];           // DateTimeInterface
+$nextUpdate = $crl['tbsCertList']['nextUpdate'] ?? null;   // DateTimeInterface or null
 $revoked    = $crl['tbsCertList']['revokedCertificates'];  // Constructed (iterable)
-$sig        = $crl['signature'];                         // BitString
+$sig        = $crl['signature'];                            // BitString
 ```
+
+The `?? null` on `nextUpdate` is recommended over a bare `$crl['tbsCertList']['nextUpdate']`: when an optional field is missing, direct ArrayAccess autovivifies an empty array slot inside the structure rather than returning `null`. PHP's `??` routes through `offsetExists`, which doesn't autovivify, so it gives you a clean `null` and leaves the structure untouched. See [`references/asn1-constructed.md` → Autovivification on read](asn1-constructed.md#autovivification-on-read).
 
 You can iterate the revocation list directly:
 
