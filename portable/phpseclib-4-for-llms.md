@@ -367,8 +367,8 @@ Only `chmod` swapped — `chown`, `chgrp`, `touch`, `truncate`, `put`, `get` wer
 `SFTP::getErrors()` exists in 4.0 but means something different than the 3.0 name suggested it might. It returns the per-operation errors collected during a recursive operation that kept going past partial failures, with operation and path included:
 
 ```
-['REMOVE /home/test/A (FAILURE): Failure',
- 'REMOVE /home/test/A/B (PERMISSION_DENIED): Permission denied',
+['REMOVE /home/test/A (SSH_FX_FAILURE): Failure',
+ 'REMOVE /home/test/A/B (SSH_FX_PERMISSION_DENIED): Permission denied',
  ...]
 ```
 

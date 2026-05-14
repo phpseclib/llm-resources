@@ -539,8 +539,8 @@ Only `chmod` changed. A 3.0-style call against 4.0 throws `TypeError` immediatel
 The 4.0 `SFTP::getErrors()` exists but is **not** the same thing as the 3.0 `getSFTPErrors()`. It's only meaningful after a recursive SFTP operation that kept going past partial failures (e.g., recursive `delete()` on a tree). Its output includes operation and path:
 
 ```
-['REMOVE /home/test/A (FAILURE): Failure',
- 'REMOVE /home/test/A/B (PERMISSION_DENIED): Permission denied',
+['REMOVE /home/test/A (SSH_FX_FAILURE): Failure',
+ 'REMOVE /home/test/A/B (SSH_FX_PERMISSION_DENIED): Permission denied',
  ...]
 ```
 

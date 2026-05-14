@@ -364,8 +364,8 @@ Four methods are gone:
 //   ['NET_SFTP_STATUS_FAILURE: Failure', 'NET_SFTP_STATUS_PERMISSION_DENIED: Permission denied', ...]
 
 // 4.0 SFTP::getErrors() output (operation + path + status):
-//   ['REMOVE /home/test/A (FAILURE): Failure',
-//    'REMOVE /home/test/A/B (PERMISSION_DENIED): Permission denied',
+//   ['REMOVE /home/test/A (SSH_FX_FAILURE): Failure',
+//    'REMOVE /home/test/A/B (SSH_FX_PERMISSION_DENIED): Permission denied',
 //    ...]
 ```
 
