@@ -275,7 +275,7 @@ $cms = new CMS\SignedData($fp);
 $pfx->sign($cms);
 ```
 
-Reading is symmetric with the rest of the library: `$cms->getSigners()`, `$cms->findSigner($x509)`, `$cms->getCertificates()`, `$cms->getCRLs()`, `$cms->addCertificate($x509)`. Embedded file content is at `$cms['content']['encapContentInfo']['eContent']` and casts to a string. The full API lives in `references/cms.md`.
+Reading is symmetric with the rest of the library: `$cms->getSigners()`, `$cms->findSigner($x509)`, `$cms->getCertificates()`, `$cms->addCertificate($x509)`, `$cms->addCRL($crl)`. Embedded file content is at `$cms['content']['encapContentInfo']['eContent']` and casts to a string. The full API lives in `references/cms.md`.
 
 One gotcha worth surfacing: `findSigner($x509)` and `Signer::getCertificate()` both perform a `keyUsage` check — if neither `digitalSignature` nor `nonRepudiation` is set on the cert, they fail to match even when the DN and serial are correct. Disable with `X509::ignoreKeyUsage()` if you need to.
 
