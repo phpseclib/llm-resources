@@ -383,7 +383,45 @@ The key APIs are largely unchanged in shape — the same `createKey()`, `load()`
 
 **PHP 8.1+ is now the minimum** (was 5.6 in 3.0). All key operations now have proper type declarations. Bad-type calls throw `TypeError` immediately rather than failing deeper in the call stack.
 
-Key serialization formats, password handling, and OpenSSH key parsing are unchanged — anything that worked in 3.0 for raw key loading and saving works identically in 4.0 with just the namespace updated.
+Key serialization formats and OpenSSH key parsing are unchanged — anything that worked in 3.0 for raw key loading and saving works identically in 4.0 with just the namespace updated. The only behavioral change in password handling is in how missing-password errors surface (see below).
+
+### `PublicKeyLoader::load()` now throws two distinct exceptions
+
+In 3.0, `PublicKeyLoader::load()` always threw `NoKeyLoadedException` on failure — for unrecognized input *and* for encrypted-but-no-password input. In 4.0 those two cases are split:
+
+| Situation | 3.0 | 4.0 |
+| --- | --- | --- |
+| Input isn't a recognizable key | `NoKeyLoadedException` | `NoKeyLoadedException` |
+| Input is a key, but encrypted and no password supplied | `NoKeyLoadedException` | `PasswordNeededException` |
+| Input is an encrypted key and the wrong password was supplied | `NoKeyLoadedException` | `NoKeyLoadedException` |
+
+The third row is a sharp edge worth noting: `PasswordNeededException` fires only when *no* password was supplied for an encrypted key, not when a *wrong* password was supplied. A wrong password produces decryption failure, which `PublicKeyLoader` can't distinguish from "this format didn't parse" — so it falls through to the same `NoKeyLoadedException` as garbage input. For applications that want to display "incorrect password" specifically, you'll need to know the format ahead of time and use `RSA::loadFormat()` (or the equivalent), which propagates `BadDecryptionException` for that case.
+
+If your 3.0 code catches `\Exception` (or `\Throwable`) around `PublicKeyLoader::load()`, nothing changes — both exception types extend `\RuntimeException` and your catch still fires. But if you catch `NoKeyLoadedException` *specifically* — common when your error path is "prompt the user for a password" — your 4.0 code will silently miss the encrypted-key case. The exception propagates up, and what was previously a "prompt the user" code path becomes an uncaught exception.
+
+```php
+// 3.0 — fires for both unrecognized input and encrypted-no-password
+try {
+    $key = PublicKeyLoader::load($bytes, $password);
+} catch (NoKeyLoadedException $e) {
+    // ask the user for a password and retry
+}
+
+// 4.0 — must catch both, or the encrypted-key case falls through
+try {
+    $key = PublicKeyLoader::load($bytes, $password);
+} catch (PasswordNeededException $e) {
+    // ask the user for a password and retry
+} catch (NoKeyLoadedException $e) {
+    // tell the user the input isn't a key at all
+}
+```
+
+The split is intentional and useful — it lets you distinguish "the user needs to type a password" from "the user pasted garbage" without heuristics — but the silent-break shape (no error, just a different exception class your catch doesn't match) makes it easy to miss during migration. Grep migrated codebases for `catch (NoKeyLoadedException` and audit each one.
+
+`RSA::load()`, `EC::load()`, `DSA::load()`, and `DH::load()` have the same split behavior. The new 4.0-only `PFX::load()` follows the same pattern — `PasswordNeededException` for "encrypted, password required" and `BadDecryptionException` for "wrong password supplied" — see [`references/pfx.md`](pfx.md#loading) for details.
+
+See [`references/keys.md` § Loading: PublicKeyLoader](keys.md#loading-publickeyloader) for the full loader API.
 
 ---
 
@@ -634,7 +672,7 @@ For migrating 3.0 catch blocks: any `catch (\UnexpectedValueException $e)` or `c
 - `phpseclib4\Exception\UnexpectedValueException` — input doesn't match the shape the method expects (e.g., `getPublicKey()` on an unparseable key format)
 - `phpseclib4\Exception\InvalidArgumentException` — caller passed a value that's the right shape but semantically wrong (e.g., an unknown algorithm name)
 - `phpseclib4\Exception\UnsupportedAlgorithmException` — input names an algorithm phpseclib doesn't implement
-- `phpseclib4\Exception\PasswordNeededException` — encrypted PFX or encrypted key loaded without a password. Notably also thrown by `PublicKeyLoader::load()` when it gets far enough into parsing to know the data is a real key but encrypted; the existence of this distinct exception is what lets `PublicKeyLoader` report "this is encrypted, I need a password" without conflating it with "this isn't a recognizable key at all" (which throws a different exception).
+- `phpseclib4\Exception\PasswordNeededException` — encrypted PFX or encrypted key loaded without a password. Notably also thrown by `PublicKeyLoader::load()` when it gets far enough into parsing to know the data is a real key but encrypted; the existence of this distinct exception is what lets `PublicKeyLoader` report "this is encrypted, I need a password" without conflating it with "this isn't a recognizable key at all" (which throws `NoKeyLoadedException`). This is a 3.0 → 4.0 behavioral change — see [the Keys section](#publickeyloaderload-now-throws-two-distinct-exceptions) for migration impact.
 - `phpseclib4\Exception\BadDecryptionException` — wrong password or corrupted ciphertext
 
 The full exception hierarchy is documented at the official phpseclib docs — refer to those for the canonical list.
@@ -671,7 +709,7 @@ A short list of common 3.0 patterns that work identically in 4.0, to save review
 - **`BigInteger`.** API stable; the namespace is the only change.
 - **SSH2 connect/login/exec.** Basic flow is unchanged. Error handling around it changed (exceptions, see above), but the success path looks the same.
 - **SFTP put/get.** Path-first, source/destination unchanged. Only `chmod` swapped.
-- **Key creation, loading, password handling, format export.** Same `createKey` / `load` / `withPassword` / `toString` shape, including all the low-level format details (PEM, DER, OpenSSH, PuTTY, XML, etc.).
+- **Key creation, loading, format export.** Same `createKey` / `load` / `withPassword` / `toString` shape, including all the low-level format details (PEM, DER, OpenSSH, PuTTY, XML, etc.). The one wrinkle is that `PublicKeyLoader::load()` now splits its failure case into two exceptions instead of one — see the Keys section above.
 
 If you're seeing a 3.0 method not in this file and not in the SKILL.md, it likely falls in the "did not change" bucket — check the official 4.0 docs to confirm the signature, but the migration is probably "update the namespace and you're done."
 

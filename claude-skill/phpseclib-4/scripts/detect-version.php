@@ -341,6 +341,21 @@ $patterns = [
         'suggestion' => 'In 4.0 most phpseclib methods throw on failure rather than returning false. Replace with try/catch around the call.',
     ],
 
+    // ---- Exception-class checks that imply 3.0 idioms ----
+    [
+        // catch (NoKeyLoadedException ...) — in 3.0 this was the *only* exception
+        // PublicKeyLoader::load() (and RSA::load() / EC::load() / etc.) threw, including
+        // for encrypted-but-no-password input. In 4.0 the encrypted-no-password case
+        // throws PasswordNeededException instead, so this catch silently stops firing
+        // for that case. Match both qualified and unqualified forms.
+        'regex' => '/\bcatch\s*\(\s*(?:\\\\?phpseclib[34]\\\\Exception\\\\)?NoKeyLoadedException\b/',
+        'version' => 'ambiguous',
+        'category' => 'catch-shape',
+        'severity' => 'warn',
+        'message' => 'catch (NoKeyLoadedException) — encrypted-no-password case now throws PasswordNeededException in 4.0',
+        'suggestion' => 'If this catch wraps `PublicKeyLoader::load()` / `RSA::load()` / etc. and the intent is to prompt the user for a password, add a `catch (PasswordNeededException ...)` clause too — otherwise the encrypted-key case will fall through as an uncaught exception. Code that catches both, or catches `\\Exception` / `\\Throwable`, is fine as-is.',
+    ],
+
     // ---- Specialized extension helpers (3.0 names) ----
     [
         'regex' => '/->\s*setDomain\s*\(|->\s*setIPAddress\s*\(/',
