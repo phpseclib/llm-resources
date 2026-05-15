@@ -189,7 +189,7 @@ public function __construct(mixed $data)
 public function addSigner(X509 $x509, int $type = CMS::ISSUER_AND_DN): Signer
 public function addNakedSigner(X509 $x509, int $type = CMS::ISSUER_AND_DN): Signer
 public function addESSSigner(X509 $x509, int $type = CMS::ISSUER_AND_DN): Signer
-public function addSignature(Signer $signer)
+public function addSignature(Signer $signer): void
 ```
 
 Build a SignedData by constructing it with content, then adding signers:
@@ -206,6 +206,15 @@ $signed->addSignature($signer);                   // attach the signer to the Si
 
 echo $signed;
 ```
+
+The constructor's `mixed $data` parameter accepts either a **string** (the content bytes, kept in memory) or a **PHP resource** (a file pointer from `fopen()` or similar). The resource form is the preferred path for large files — phpseclib streams from the file pointer instead of loading the entire content into memory, which matters a lot once you're signing multi-MB or GB inputs:
+
+```php
+$signed = new CMS\SignedData(fopen('/path/to/large-file.bin', 'r'));
+// content is streamed during signing/serialization; never fully loaded into memory
+```
+
+The type hint is `mixed` because PHP still doesn't have a `resource` type hint (not even in 8.5). Passing anything other than `string` or `resource` throws `phpseclib4\Exception\UnexpectedValueException`.
 
 The three `addSigner` variants differ in what signed attributes get pre-populated:
 
@@ -261,29 +270,48 @@ Use `addNakedSigner` only when:
 
 A "detached" SignedData refers to content that isn't embedded in the CMS — you ship the SignedData and the content separately. This is how `.p7s` files typically work (the `.p7s` is the signature; the email body is the signed content).
 
+There are two ways to produce a detached SignedData:
+
+**The conventional way**: construct with the content embedded, then strip it before serializing.
+
 ```php
 $signed = new CMS\SignedData($content);
-
 // ... add signer, sign ...
 
-$signed->detach();        // strips encapsulated content; signature still validates against $content
-$bytes = (string) $signed;
-file_put_contents('document.p7s', $bytes);
+$signed->detach();
+file_put_contents('document.p7s', (string) $signed);
 file_put_contents('document.txt', $content);
 ```
+
+**The streaming way**: construct with a resource. phpseclib hashes through the file pointer during signing but never embeds the content. The resulting CMS is naturally detached — no `detach()` call needed.
+
+```php
+$signed = new CMS\SignedData(fopen('document.txt', 'r'));
+// ... add signer, sign ...
+
+file_put_contents('document.p7s', (string) $signed);
+// document.txt is already on disk; the .p7s references it implicitly
+```
+
+The streaming form is preferred for large files. It avoids loading the content into memory at any point in the sign/serialize cycle.
 
 To verify a detached SignedData, re-attach the content first:
 
 ```php
 $signed = CMS::load(file_get_contents('document.p7s'));
+
+// Attach by string (small content):
 $signed->attach(file_get_contents('document.txt'));
+
+// Or attach by resource (large content — streamed during verification):
+$signed->attach(fopen('document.txt', 'r'));
 
 foreach ($signed->getSigners() as $signer) {
     var_dump($signer->validateSignature());
 }
 ```
 
-`attach()` accepts a string (the content bytes) or any data the SignedData can hash. `detach()` removes the encapsulated content from the structure; signers' message-digest attributes still refer to the original content, so re-attaching the same content makes the signatures valid again.
+`attach()` accepts a `string` (the content bytes) or a `resource` (a file pointer). Anything else throws `UnexpectedValueException`. `detach()` removes any embedded content from the structure and clears any file pointer; signers' message-digest attributes still refer to the original content, so re-attaching the same content (by either means) makes the signatures valid again.
 
 ### SignedData validation
 
@@ -319,33 +347,49 @@ public function getKeyLengthInBytes(): int
 public function withKey(string $key): self
 public function deriveFromKey(string|EC\PrivateKey|RSA\PrivateKey $key): self
 public function deriveFromPassword(string $password): self
+public function decrypt(): string
 ```
 
-Three paths to populate the content-encryption key:
+Three paths to populate the content-encryption key, all of which return `$this` so they chain into `decrypt()`:
 
 1. **You already have the CEK**: call `withKey($key)` directly. Used when the CEK was delivered out-of-band.
-2. **You have a private key that matches one of the recipients**: call `deriveFromKey($privateKey)`. Walks the recipients, finds a match, derives the CEK via the appropriate KEK mechanism.
+2. **You have a private key that matches one of the recipients**: call `deriveFromKey($privateKey)`. Walks the recipients, finds a match, derives the CEK via the appropriate KEK mechanism (RSA key transport, ECDH, etc.).
 3. **You have a password for a PasswordRecipient**: call `deriveFromPassword($password)`. Walks the password-based recipients (PWRI-KEK), tries each.
 
-Once the CEK is populated, you decrypt the content via the recipient's `decrypt()` method (returns the plaintext bytes). The exact ergonomics depend on which path you took to populate the CEK — see the `getRecipients()` flow below.
+`decrypt()` then uses the populated CEK to decrypt the content, returning the plaintext bytes:
 
 ```php
 $cms = CMS::load(file_get_contents('encrypted.p7m'));
 
 if ($cms instanceof CMS\EncryptedData) {
-    // Decrypt using an RSA recipient
-    $plaintext = $cms->findRecipient($recipientX509)?->withKey($rsaPrivateKey)->decrypt();
+    // RSA recipient — the typical X509-based path
+    $plaintext = $cms->deriveFromKey($rsaPrivateKey)->decrypt();
 
-    // Or with a password
-    $plaintext = $cms->getRecipients()[0]?->withPassword('secret')->decrypt();
+    // EC recipient — Diffie-Hellman path
+    $plaintext = $cms->deriveFromKey($ecPrivateKey)->decrypt();
 
-    // Or with a directly-supplied CEK
-    $cms->withKey($cek);
-    // ... decrypt via recipient or directly with the algorithm + CEK
+    // Password-based
+    $plaintext = $cms->deriveFromPassword('secret')->decrypt();
+
+    // Out-of-band CEK
+    $plaintext = $cms->withKey($cek)->decrypt();
 }
 ```
 
-`getAlgorithm()` returns the content-encryption algorithm OID (e.g., `id-aes128-CBC-PAD`). `getKey()` returns the CEK once populated (raises if not). `getKeyLength()` / `getKeyLengthInBytes()` describe the expected CEK size for the content-encryption algorithm.
+You can also work through specific recipients instead of letting `deriveFromKey()` pick one:
+
+```php
+$plaintext = $cms->findRecipient($recipientX509)?->withKey($rsaPrivateKey)->decrypt();
+$plaintext = $cms->getRecipients()[0]?->withPassword('secret')->decrypt();
+```
+
+Recipients implement the same `decrypt()` contract (via the `KeyDerivation` trait shared with `EncryptedData`), so the call signatures are consistent. The recipient-side `decrypt()` reaches up through `$this->cms->cek` to find the populated CEK on its parent EncryptedData, then runs the same content decryption.
+
+The two paths produce identical results. Use the EncryptedData-direct form when you don't care which recipient does the work; use the recipient form when you've identified the specific recipient (e.g., via `findRecipient()`) and want explicit control.
+
+`getAlgorithm()` returns the content-encryption algorithm OID (e.g., `id-aes128-CBC-PAD`). `getKey()` returns the CEK once populated; calling it before `withKey()` / `deriveFrom*()` throws an uninitialized-property error since the `$cek` property is typed-non-nullable. `getKeyLength()` / `getKeyLengthInBytes()` describe the expected CEK size for the content-encryption algorithm in bits and bytes respectively.
+
+`decrypt()` requires the CEK to be set — calling it before one of the populate-CEK methods throws `phpseclib4\Exception\InvalidStateException` with the message "Content encryption key not set."
 
 ### Recipient types
 
@@ -411,7 +455,6 @@ Construction encrypts immediately. The result is in the `id-encryptedData` form 
 public function createNewRecipientFromPassword(string $password, string $encryptionAlgorithm = 'aes128-CBC-PAD'): PasswordRecipient
 public function createNewRecipientFromX509(X509 $x509, int $type = CMS::ISSUER_AND_DN): KeyTransRecipient|KeyAgreeRecipient
 public function createNewRecipientFromKeyWithIdentifier(...): KEKRecipient
-public function placeRecipient(Recipient $recipient, string $type): void
 ```
 
 ```php
@@ -435,8 +478,6 @@ echo $cms;
 - EC cert → `KeyAgreeRecipient` (Diffie-Hellman with the recipient's EC private key)
 
 Each `createNewRecipient*` call adds a recipient to the CMS. A single EncryptedData can have multiple recipients of mixed types — any one of them can decrypt the same content.
-
-`placeRecipient()` is a lower-level path for inserting a pre-built `Recipient` into a specific slot — used by phpseclib internally and rarely by callers.
 
 ---
 
