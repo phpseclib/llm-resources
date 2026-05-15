@@ -65,6 +65,7 @@ If you're migrating a codebase, do this in order:
 - [Keys (RSA, EC, DSA)](#keys-rsa-ec-dsa)
 - [Random bytes](#random-bytes)
 - [Engine selection](#engine-selection)
+- [Math / `BigInteger`](#math--biginteger)
 - [ASN.1 (low-level)](#asn1-low-level)
 - [SSH2 and SFTP](#ssh2-and-sftp)
 - [Exceptions and error handling](#exceptions-and-error-handling)
@@ -94,7 +95,7 @@ The namespace mapping is mechanical, but **the API at the new namespace is often
 | (no equivalent) | `phpseclib4\File\PFX` | Brand new in 4.0 |
 | (no equivalent) | `phpseclib4\File\CMS` | Brand new in 4.0 |
 | `phpseclib3\File\ASN1` | `phpseclib4\File\ASN1` | Includes the `DN_*` constants now |
-| `phpseclib3\Math\BigInteger` | `phpseclib4\Math\BigInteger` | Stable |
+| `phpseclib3\Math\BigInteger` | `phpseclib4\Math\BigInteger` | API mostly stable; `modInverse` no longer returns `false` on no-inverse — see Math section below |
 | `phpseclib3\Net\SSH2` | `phpseclib4\Net\SSH2` | Error-reporting methods removed; throws now |
 | `phpseclib3\Net\SFTP` | `phpseclib4\Net\SFTP` | `chmod` arg order changed; error methods reworked |
 | `phpseclib3\System\SSH\Agent` | `phpseclib4\System\SSH\Agent` | `Identity` now implements `PrivateKey` |
@@ -455,6 +456,38 @@ These methods are almost exclusively used by phpseclib's own unit tests. Product
 
 ---
 
+## Math / `BigInteger`
+
+The `BigInteger` API is mostly stable — the constructor, arithmetic, modular, bitwise, comparison, serialization, and random-generation methods all work the same as in 3.0. The relevant changes:
+
+### `modInverse()` no longer returns `false`
+
+In 3.0, `modInverse()` returned `false` when `$a` had no inverse modulo `$n` (i.e., when `gcd($a, $n) != 1`). In 4.0 it's declared `: ?BigInteger`, so the intent is to return `null` in that case.
+
+```php
+// 3.0
+$inv = $a->modInverse($n);
+if ($inv === false) {
+    // no inverse
+}
+
+// 4.0
+$inv = $a->modInverse($n);
+if ($inv === null) {
+    // no inverse
+}
+```
+
+The 3.0-style `=== false` check will silently never fire in 4.0 — there's no `false` return path. Any code relying on that branch needs updating.
+
+### Everything else
+
+Constructor, `toString` / `toHex` / `toBits` / `toBytes`, `add` / `subtract` / `multiply` / `divide`, `powMod` / `modPow`, `gcd` / `extendedGCD`, `compare` / `equals` / `between`, all the bitwise operations, `setPrecision` / `getPrecision`, `random` / `randomPrime` / `randomRange` / `randomRangePrime`, `isPrime`, `min` / `max`, `__serialize` / `jsonSerialize` — same shape, same semantics. Update the namespace and you're done.
+
+See `references/bigint.md` for the full 4.0 API.
+
+---
+
 ## ASN.1 (low-level)
 
 If you only use phpseclib's high-level APIs — `X509::load()`, `RSA::load()`, `EC::createKey()`, etc. — you can skip this section. Almost nothing changed at the surface. The changes here are for the ~5% of users who use `ASN1::decodeBER()` / `ASN1::asn1map()` directly to parse custom ASN.1 structures (e.g., a custom protocol's binary format, or a PFX-like container that phpseclib didn't natively support in 3.0).
@@ -706,7 +739,7 @@ A short list of common 3.0 patterns that work identically in 4.0, to save review
 - **Raw byte signing.** `$priv->sign($bytes)` and `$pub->verify($bytes, $sig)` are unchanged.
 - **Symmetric ciphers.** AES, DES, 3DES, Twofish, Blowfish, etc. — same API.
 - **Hash and HMAC.** `phpseclib4\Crypt\Hash` is the same shape as `phpseclib3\Crypt\Hash`.
-- **`BigInteger`.** API stable; the namespace is the only change.
+- **`BigInteger`.** Mostly stable. The one breaking change is `modInverse` — see the Math section above.
 - **SSH2 connect/login/exec.** Basic flow is unchanged. Error handling around it changed (exceptions, see above), but the success path looks the same.
 - **SFTP put/get.** Path-first, source/destination unchanged. Only `chmod` swapped.
 - **Key creation, loading, format export.** Same `createKey` / `load` / `withPassword` / `toString` shape, including all the low-level format details (PEM, DER, OpenSSH, PuTTY, XML, etc.). The one wrinkle is that `PublicKeyLoader::load()` now splits its failure case into two exceptions instead of one — see the Keys section above.

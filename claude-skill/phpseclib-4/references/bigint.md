@@ -16,9 +16,10 @@ Reach for `phpseclib4\Math\BigInteger` when:
 - You're working with values phpseclib already handed you as `BigInteger` instances (most common case).
 - You need a single interface that works regardless of which extension is installed — `BigInteger` auto-picks GMP, BCMath, or pure-PHP without your code needing to care.
 - You need an operation that's awkward in raw GMP/BCMath — `randomRangePrime()`, `extendedGCD()` returning a labeled array, `createRecurringModuloFunction()`, the bit-precision-aware rotate operations.
+- You need **fixed-precision** integer math — operating as a 128-bit or 256-bit integer with wraparound, bitwise NOT against a known width, rotates with a defined word size. `setPrecision()` gives you this; raw GMP/BCMath don't.
 - You're writing code that ships to environments without GMP and you don't want a hard dependency.
 
-For straight `a + b` or `a mod n` where you already know GMP is installed, `gmp_add($a, $b)` is faster.
+For straight `a + b` or `a mod n` where you already know GMP is installed, `gmp_add($a, $b)` is faster. PHP 5.6+ also lets you write `$a + $b`, `$a * $b`, `$a % $b`, `$a << $b`, and friends directly on `\GMP` instances ([operator overloading](https://wiki.php.net/rfc/operator_overloading_gmp)) — same speed as the function form, more readable.
 
 ## Contents
 
@@ -59,7 +60,7 @@ The second argument is the base. Supported bases:
 | --- | --- |
 | `2` | Bit string (`'1010'`) |
 | `10` | Decimal string or PHP int — the default |
-| `16` | Hex string, no `0x` prefix (`'deadbeef'`) |
+| `16` | Hex string. The optional `0x` prefix is stripped (`'deadbeef'` and `'0xdeadbeef'` both work). |
 | `256` | Raw bytes — for parsing wire-format integers |
 
 **Negative bases** mean "interpret as two's complement". `-256` parses bytes where the high bit indicates sign; `-16` does the same for hex. Use these when reading values from binary protocols that store signed integers in two's complement.
@@ -134,7 +135,7 @@ $ext    = $a->extendedGCD($n);             // ['gcd' => ..., 'x' => ..., 'y' => 
 
 `powMod` / `modPow` are the workhorse for RSA-style operations. The two names are aliases — pick whichever reads better in context.
 
-`modInverse($n)` returns `null` (not `false`) if `$a` has no inverse modulo `$n` — i.e., if `gcd($a, $n) != 1`. Guard with a null check:
+`modInverse($n)` returns `?BigInteger` — `null` when `$a` has no inverse modulo `$n` (i.e., `gcd($a, $n) != 1`). Guard with a null check:
 
 ```php
 $inv = $a->modInverse($n);
@@ -142,6 +143,8 @@ if ($inv === null) {
     // $a has no inverse mod $n
 }
 ```
+
+**Migration note**: in phpseclib 3.0 this returned `false` on no-inverse. Any 3.0 code doing `if ($inv === false)` needs updating to `if ($inv === null)` — the `false` check will never fire in 4.0.
 
 `extendedGCD` returns a labeled array `['gcd' => $g, 'x' => $x, 'y' => $y]` such that `$a * $x + $n * $y == $g`. Useful when you need not just the GCD but the Bézout coefficients (CRT setup, for example).
 
@@ -157,12 +160,12 @@ $r2 = $reducer($x2);
 $r3 = $reducer($x3);
 ```
 
-Faster than constructing a fresh modulo context each time, particularly on the GMP engine where the closure captures the modulus by value.
+Faster than constructing a fresh modulo context each time — the **non-GMP engines** (PHP64, PHP32, BCMath) precompute Barrett-reduction constants once when the closure is built, so each call avoids redoing that setup. On the GMP engine the win is smaller — GMP's `$x % $n` is already fast, and the closure mostly just saves a couple of object allocations.
 
 ## Comparison
 
 ```php
-$cmp = $a->compare($b);              // negative, zero, or positive
+$cmp = $a->compare($b);              // negative, zero, or positive — same shape as PHP's <=> spaceship operator
 $eq  = $a->equals($b);               // bool
 $in  = $a->between($min, $max);      // bool, inclusive
 ```
@@ -301,18 +304,18 @@ Cloning is supported via `__clone`. Most code doesn't need to clone explicitly �
 `BigInteger` auto-selects the fastest available implementation on first use. You normally don't need to think about this. The selection order in current phpseclib 4.0:
 
 1. **GMP** — if the `gmp` extension is loaded. Fastest.
-2. The fastest of the pure-PHP engines that's available, paired with **OpenSSL** as a modexp accelerator when the `openssl` extension is loaded. The "fastest pure-PHP engine" depends on PHP version:
-   - PHP 8.4+: **BCMath** ? **PHP64** ? **PHP32**
-   - Earlier: **PHP64** ? **BCMath** ? **PHP32**
+2. The fastest of the remaining engines that's available, paired with **OpenSSL** as a modexp accelerator when the `openssl` extension is loaded. The "fastest" depends on PHP version:
+   - PHP 8.4+: **BCMath** → **PHP64** → **PHP32**
+   - Earlier: **PHP64** → **BCMath** → **PHP32**
    (BCMath got significantly faster in 8.4, hence the swap.)
-3. If OpenSSL isn't usable, the same pure-PHP engines paired with their built-in `DefaultEngine` for modexp.
+3. If OpenSSL isn't usable, the same engines paired with their built-in `DefaultEngine` for modexp.
 
-The PHP64 engine requires 64-bit PHP (`PHP_INT_SIZE >= 8`); PHP32 works on 32-bit builds. Both refuse to load with JIT enabled on Windows.
+The PHP64 engine requires 64-bit PHP (`PHP_INT_SIZE >= 8`); PHP32 works on 32-bit builds. BCMath requires the `bcmath` extension. The two pure-PHP engines (PHP64, PHP32) also refuse to load when JIT is enabled on Windows under PHP < 8.2.13 — this is a workaround for a PHP bug ([php-src#11917](https://github.com/php/php-src/issues/11917)) that crashed them in that specific configuration. You can override the refusal by defining the `PHPSECLIB_ALLOW_JIT` constant, but the safer fix is to upgrade PHP, install GMP/BCMath, or disable JIT.
 
 Each "main engine" pairs with a "modexp engine" for modular exponentiation:
 
 - **GMP** uses its built-in `DefaultEngine` (which calls `gmp_powm`).
-- The pure-PHP engines (PHP64, PHP32, BCMath) prefer **OpenSSL** as a modexp accelerator when available — it does big-integer modular exponentiation much faster than pure PHP. The accelerator only kicks in for moduli between 31 and 16384 bits; outside that window, the engine falls back to its `DefaultEngine`.
+- The non-GMP engines (PHP64, PHP32, BCMath) prefer **OpenSSL** as a modexp accelerator when available — it does big-integer modular exponentiation much faster. The accelerator only kicks in for moduli between 31 and 16384 bits; outside that window, the engine falls back to its `DefaultEngine`.
 
 To inspect or override the selection:
 
@@ -329,7 +332,7 @@ The second argument to `setEngine` is a list of modexp engines to try in order �
 
 **When you'd actually call `setEngine`:** unit tests that need to exercise a specific engine path, performance comparisons, or working around a specific bug in one engine. For production code, leave the auto-selection alone — it picks the right thing.
 
-If you're on Windows with JIT enabled and have neither GMP nor BCMath, none of the engines load (the constructor throws `BadConfigurationException` with a message telling you to install GMP/BCMath or disable JIT). This is the one configuration where you have to do something.
+If you're on Windows under PHP < 8.2.13 with JIT enabled and have neither GMP nor BCMath, none of the engines load (the constructor throws `BadConfigurationException` with a message telling you to install GMP/BCMath or disable JIT). Upgrading PHP to 8.2.13+ also resolves it. Defining `PHPSECLIB_ALLOW_JIT` bypasses the check at your own risk.
 
 ## Exceptions
 
