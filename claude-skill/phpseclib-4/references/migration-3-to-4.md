@@ -454,6 +454,22 @@ This rename was backported to 3.0.51 — if you're on a current 3.0 release, the
 
 These methods are almost exclusively used by phpseclib's own unit tests. Production code rarely needs them.
 
+### Symmetric ciphers: `'OpenSSL (GCM)'` → `'OpenSSL (AEAD)'`
+
+Note that the above is about the *asymmetric* key engine API (`RSA::forceEngine()` and friends). Symmetric ciphers have a separate, parallel engine-selection API on `phpseclib4\Crypt\Common\SymmetricKey` — `setPreferredEngine()`, `getEngine()`, `isValidEngine()` — and those method names did **not** change between 3.0 and 4.0.
+
+What *did* change for symmetric ciphers is one of the engine name strings:
+
+| 3.0 | 4.0 |
+| --- | --- |
+| `'OpenSSL (GCM)'` (`ENGINE_OPENSSL_GCM`) | `'OpenSSL (AEAD)'` (`ENGINE_OPENSSL_AEAD`) |
+
+The rename reflects that the same OpenSSL AEAD bindings now back more than just GCM (Poly1305 in particular). The other engine name strings — `'OpenSSL'`, `'libsodium'`, `'Eval'`, `'PHP'` — are unchanged.
+
+This only matters if 3.0 code does string-compares against `getEngine()` output (e.g. `if ($cipher->getEngine() === 'OpenSSL (GCM)')`), calls `setPreferredEngine('OpenSSL (GCM)')` or `isValidEngine('OpenSSL (GCM)')`, or references the `ENGINE_OPENSSL_GCM` constant directly. In practice almost no application code does any of this — engine selection for symmetric ciphers is auto, and the rare manual override is usually `'PHP'` to force pure-PHP for testing. If a codebase doesn't mention `'OpenSSL (GCM)'` or `ENGINE_OPENSSL_GCM`, there is nothing to migrate here.
+
+For the full list of symmetric engine names and constants, see the symmetric-key reference.
+
 ---
 
 ## Math / `BigInteger`
