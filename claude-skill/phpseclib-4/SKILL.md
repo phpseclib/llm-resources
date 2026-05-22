@@ -279,6 +279,15 @@ Reading is symmetric with the rest of the library: `$cms->getSigners()`, `$cms->
 
 One gotcha worth surfacing: `findSigner($x509)` and `Signer::getCertificate()` both perform a `keyUsage` check — if neither `digitalSignature` nor `nonRepudiation` is set on the cert, they fail to match even when the DN and serial are correct. Disable with `X509::ignoreKeyUsage()` if you need to.
 
+For `EncryptedData` (which also handles `EnvelopedData`), the constructor takes optional `$encryptionAlgorithm` and `$key`. If `$key` is the wrong length for the chosen algorithm, the constructor throws `phpseclib4\Exception\LengthException`. The safe pattern is to omit `$key`, let the constructor generate one of the right size, then read it back:
+
+```php
+$cms = new CMS\EncryptedData('payload');   // auto-generates CEK for default aes128-CBC-PAD
+$cek = $cms->getKey();                      // share out-of-band with the recipient
+```
+
+This avoids the `LengthException` path entirely and works regardless of which algorithm is the default. `getAlgorithm()`, `getKeyLength()`, and `getKeyLengthInBytes()` are also available for inspection.
+
 ### 8. Output format
 
 `X509`, `CSR`, `CRL` cast to PEM by default. Switch to DER with the static `enableBinaryOutput()` / `disableBinaryOutput()` toggles, or per-call with `$x509->toString(['binary' => true])`. PFX is binary-only.

@@ -126,7 +126,6 @@ There's no penalty for going through `CMS::load()` — it adds maybe one extra A
 public function getSigners(): array
 public function findSigner(X509 $x509): ?Signer
 public function getCertificates(): array
-public function calculateFileHash(string $hash)
 public function attach(mixed $data): void
 public function detach()
 ```
@@ -151,8 +150,6 @@ foreach ($signed->getSigners() as $signer) {
 `getSigners()` returns an array of `Signer` objects. `findSigner($x509)` returns the first signer whose cert matches the given X509, or `null`.
 
 `getCertificates()` returns the embedded certificates (typically the signer certs, sometimes intermediates). `addCertificate($x509)` / `addCRL($crl)` add to those collections.
-
-`calculateFileHash($algo)` computes a hash over the encapsulated content using the given algorithm — useful for signing operations and for the detached/attached transition described below.
 
 ### The `Signer` subobject
 
@@ -446,6 +443,8 @@ $cms = new CMS\EncryptedData('Hello, world.', 'aes256-CBC-PAD');
 $cms = new CMS\EncryptedData('Hello, world.', 'aes128-CBC-PAD', $existingCek);
 // Use a specific CEK (must be the right length for the algorithm)
 ```
+
+If `$key` is the wrong length for the chosen algorithm, the constructor throws `phpseclib4\Exception\LengthException`. The safest path — particularly if no recipients will be attached and the CEK has to be shared out-of-band — is to omit `$key`, let the constructor generate one, then read it back with `getKey()`. That avoids having to remember the per-algorithm key length and avoids the `LengthException` path entirely.
 
 Construction encrypts immediately. The result is in the `id-encryptedData` form by default — no recipients yet. Add recipients to convert it to `id-envelopedData`.
 
