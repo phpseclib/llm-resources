@@ -433,6 +433,21 @@ When you modify a parsed structure (e.g., `$x509['tbsCertificate']['serialNumber
 
 This is what allows you to freely modify any field anywhere in a parsed cert and then `echo $x509` to get a correctly-re-encoded result. The first re-encoding call regenerates the bytes from the (now-modified) decoded children; subsequent calls reuse the regenerated cache until something else changes.
 
+### Writes are not validated
+
+`offsetSet` stores whatever you give it — it does no shape or type checking:
+
+```php
+$x509 = X509::load($pem);
+$x509['tbsCertificate'] = 'hello, world';   // accepted silently
+```
+
+The assignment succeeds. The mistake doesn't surface until the structure is re-encoded — `echo`, `getEncoded()`, `toString()` — and when it does, it's a plain PHP `TypeError` thrown from inside the encoder (`X509::toString()` dereferences `$this->cert['tbsCertificate']['subjectPublicKeyInfo']` as its first step, which indexes the string with a string key), **not** a `phpseclib4\Exception\*`. So a `catch (\phpseclib4\Exception\BaseException $e)` around your phpseclib calls won't catch it, and the stack trace points at the encoder rather than at the line that made the bad write.
+
+This is the write-side companion to "errors surface at access time, not at load time." A `TypeError` originating in `toString()` / `ASN1::encodeDER()` usually means an earlier ArrayAccess write put the wrong shape into a slot — look upstream from the throw site, not at it.
+
+Where they exist, prefer the high-level classes' helper setters (`X509::setSubjectDN()`, `setExtension()`, `makeCA()`, …) over direct structural writes: they normalize varied input formats and save you assembling the boilerplate shape by hand. They normalize *format*, though, not *structure* for every field — handing a scalar to a field that expects an array can still slip through to the same deferred failure. Reserve direct `$node['...'] = ...` writes for cases where you know the exact expected shape.
+
 ### Disabling invalidation
 
 ```php

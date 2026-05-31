@@ -535,6 +535,37 @@ If you have 3.0 code that walks the deeply-nested `decodeBER()` output, the migr
 
 The old [phpseclib.sourceforge.net/x509/asn1parse.php](https://phpseclib.sourceforge.net/x509/asn1parse.php) demo relied on the 3.0 deeply-nested output and would need this kind of rework to run on 4.0.
 
+### Getting the raw bytes of a sub-structure (the `signatureSubject` pattern)
+
+In 3.0, recovering the exact encoded bytes of an inner structure — most often the `tbsCertificate`, the region a certificate's signature actually covers — meant slicing the original DER by offset and length out of the `decodeBER()` output:
+
+```php
+// 3.0
+$decoded = ASN1::decodeBER($cert);
+$signatureSubject = substr(
+    $cert,
+    $decoded[0]['content'][0]['start'],
+    $decoded[0]['content'][0]['length']
+);
+```
+
+This is *why* 3.0's `X509` stashed `$this->signatureSubject` at load time: re-encoding a parsed structure wasn't guaranteed to reproduce the original bytes, so the only safe way to verify a signature later was to remember the exact span that was signed.
+
+In 4.0 the `Constructed` object retains its own original encoding, so you ask the sub-structure for its bytes directly — no offsets, no slicing, no need to hold onto the source string:
+
+```php
+// 4.0
+$cert = X509::load($pem);
+$signatureSubject = $cert['tbsCertificate']->getEncoded();
+```
+
+`getEncoded()` returns the element's header plus content, byte-for-byte identical to what was parsed (as long as you haven't modified that sub-tree). Any `Constructed` node behaves the same way, not just `tbsCertificate`: `$crl['tbsCertList']->getEncoded()`, `$csr['certificationRequestInfo']->getEncoded()`, and so on.
+
+Two things to know:
+
+- `getEncoded()` is a method on `Constructed`, so it only works on slots that are actually `Constructed` objects. A cert parsed with `X509::load()` is `Constructed` throughout. A cert built from scratch with `new X509()` holds plain arrays internally until it's compiled — which happens automatically the first time you index into it (`$x509['tbsCertificate']` triggers it), serialize it, or otherwise force materialization. So in practice the call above works on both loaded and built certs.
+- The bytes you get from `tbsCertificate->getEncoded()` are the same bytes phpseclib hashes when signing (`Signable::getSignableSection()` — see `asn1-constructed.md`). You don't need this for ordinary signing or verification; `validateSignature()` and `$key->sign($x509)` handle it for you. It's for when a protocol needs the signed region on its own.
+
 ### `ASN1::asn1map()` → `ASN1::map()` (and input-shape change)
 
 ```php
@@ -548,6 +579,31 @@ $mapped = ASN1::map($decoded, $map);          // no index
 ```
 
 Two changes in one line: the method was renamed (`asn1map` → `map`), and the input no longer needs the `[0]` index because `decodeBER()` now returns the single top-level structure directly rather than wrapping it in a one-element array.
+
+### `Element->element` → `Element->value`
+
+Mapping an `ASN1::TYPE_ANY` field returns an `ASN1\Element` wrapping the raw bytes. In 3.0 you read those bytes off `->element`; in 4.0 the property is `->value`:
+
+```php
+// 3.0
+$bytes = $mapped['parameters']->element;
+
+// 4.0
+$bytes = $mapped['parameters']->value;
+```
+
+On an `Element`, `->value`, `getEncoded()`, and casting with `(string)` all return the same raw bytes, so `(string) $mapped['parameters']` is a name-independent alternative if you'd rather not depend on the property.
+
+### `TYPE_ANY` at the top level
+
+A standalone `ASN1::TYPE_ANY` map over a SEQUENCE or SET worked in 3.0 but throws `EncodedDataUnavailableException` in 4.0:
+
+```php
+$decoded = ASN1::decodeBER($der);
+$result  = ASN1::map($decoded, ['type' => ASN1::TYPE_ANY]);   // throws in 4.0 if $der is a SEQUENCE/SET
+```
+
+Building the `Element` requires the original raw encoding, and a top-level `Constructed` decoded on its own doesn't carry it in the form `map()` needs. The same `TYPE_ANY` field works fine *inside* a parent SEQUENCE/SET, because the parent holds the byte range the `Element` is built from. If you need the raw bytes of a standalone element, call `getEncoded()` on the `Constructed` from `decodeBER()` rather than mapping it as `ANY`.
 
 ### `$special` callbacks → `$rules`
 
