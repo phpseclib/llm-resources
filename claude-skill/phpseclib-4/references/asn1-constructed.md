@@ -335,6 +335,8 @@ interface BaseType {
 }
 ```
 
+The cache methods tie into the [`useEncodedCache`](#toggling-the-parser) toggle. By default `ASN1::encodeDER()` reuses a node's stored byte-for-byte encoding; `ignoreEncodedCache()` turns that off globally; and `enableForcedCache()` pins an individual node so its cached bytes are reused even when the global toggle is off (`isCacheForced()` reports the pin). The reuse is also gated on `hasEncoded()` — an invalidated node reports `false`, which is what lets `encodeDER` re-encode exactly the modified path while reusing untouched subtrees.
+
 Most leaf types use the `Common` trait, which implements all of this in terms of a `$metadata` array. The exceptions are `Constructed`, `Choice`, `BitString`, and `Integer`, which implement the interface directly (and store the metadata as named properties for performance or for compatibility with the underlying parent class).
 
 ### Leaf types
@@ -526,7 +528,7 @@ Off by default (errors throw). Turn on at your own risk; mostly useful for foren
 A few static toggles control parser behavior:
 
 ```php
-ASN1::useEncodedCache();         // remember encoded bytes (default)
+ASN1::useEncodedCache();         // reuse cached encoding when re-encoding (default)
 ASN1::ignoreEncodedCache();      // re-encode from scratch every time
 
 ASN1::enableCacheInvalidation();   // dirty parents on modification (default)

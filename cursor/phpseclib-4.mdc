@@ -155,7 +155,7 @@ $x509->validateSignature();                  // includes revocation check
 $x509->validateURL('https://example.com/');
 ```
 
-Knobs (all static): `setTargetValidationDate()`, `setRecurLimit()`, `disableURLFetch()`, `ignoreKeyUsage()`, `ignoreBasicConstraints()`, `setCRLLookupCallback()`.
+Knobs (all static): `setTargetValidationDate()`, `setRecurLimit()`, `ignoreKeyUsage()`, `ignoreBasicConstraints()`, `setCRLLookupCallback()`. AIA intermediate fetching is off by default in 4.0 (3.0's `disableURLFetch()`/`enableURLFetch()` are gone); opt in with `setURLFetchCallback(fn(string $host, string $ip, int $port, string $scheme): bool)`, which gates each connection by the resolved `$ip` — judge `$ip`, don't re-resolve `$host`.
 
 ## Library-wide changes from 3.0
 

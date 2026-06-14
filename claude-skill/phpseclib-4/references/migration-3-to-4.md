@@ -333,9 +333,9 @@ The 3.0 methods lived on `X509` and took an optional `$crl` parameter (defaultin
 | `$x509->loadCA($pem)` | `X509::addCA($pem)` (now static, and renamed) |
 | `$x509->validateSignature()` | `$x509->validateSignature()` (now also runs revocation and date checks) |
 | `$x509->validateURL($url)` | `$x509->validateURL($url)` (unchanged) |
-| `$x509->validateDate($date)` | (removed) — see below |
-| `X509::disableURLFetch()` | `X509::disableURLFetch()` (unchanged; was already static in 3.0) |
-| `X509::enableURLFetch()` | `X509::enableURLFetch()` (unchanged) |
+| `$x509->validateDate($date)` | **removed** — folded into `validateSignature()`; set the date with `X509::setTargetValidationDate($date)` first (see below) |
+| `X509::disableURLFetch()` | **removed** — AIA fetching is off by default in 4.0, so there's nothing to disable |
+| `X509::enableURLFetch()` | **removed** — opt in with `X509::setURLFetchCallback()` instead (see note below) |
 | `X509::setRecurLimit($n)` | `X509::setRecurLimit($n)` (unchanged; was already static in 3.0) |
 
 New in 4.0:
@@ -344,7 +344,27 @@ New in 4.0:
 - `X509::ignoreKeyUsage()` — skip the keyUsage check on the issuer
 - `X509::ignoreBasicConstraints()` — skip the basicConstraints check
 - `X509::setCRLLookupCallback(callable $fn)` — supply a callback that takes a CDP URL and a serial number, returns whether that serial is listed as revoked in the corresponding CRL. Used by `validateSignature()` for revocation checking. (CRL only; phpseclib 4.0 does not currently do OCSP.)
+- `X509::setURLFetchCallback(?callable $fn)` — opt in to AIA intermediate fetching and gate where phpseclib may connect. The callback receives `(string $host, string $ip, int $port, string $scheme)` and returns `true`/`false`; phpseclib connects to the resolved `$ip` it passed you. Replaces 3.0's `disableURLFetch()` / `enableURLFetch()`. See the behavior-change note below.
 - CSR and SPKAC have their own `validateSignature()` (always self-signed, no `addCA()` setup needed)
+
+### AIA intermediate fetching is now opt-in (behavior change)
+
+In 3.0, `validateSignature()` would by default follow the `caIssuers` URL in a certificate's `id-pe-authorityInfoAccess` (AIA) extension to download a missing intermediate — automatically, with no opt-in. Because that URL is attacker-controlled whenever you validate a certificate you didn't issue, this was a server-side request forgery vector: a crafted certificate could make your server connect to `127.0.0.1`, `169.254.169.254`, or internal-only services. The only mitigation in 3.0 was to call `disableURLFetch()`, which most callers never knew about.
+
+4.0 inverts the default: AIA fetching is **off** unless you opt in. If your 3.0 code relied on automatic intermediate fetching — typically when you were handed a leaf certificate without its chain and had only roots loaded — validation will stop fetching in 4.0 and may fail with an untrusted-issuer error. To restore fetching, register a callback that approves the destinations you trust:
+
+```php
+X509::setURLFetchCallback(function (string $host, string $ip, int $port, string $scheme): bool {
+    // allow only public addresses; judge $ip, do NOT re-resolve $host
+    return filter_var(
+        $ip,
+        FILTER_VALIDATE_IP,
+        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+    ) !== false;
+});
+```
+
+phpseclib resolves the host once and connects to the exact `$ip` it passes the callback, so an approved address can't be redirected by DNS rebinding — provided your callback judges `$ip` rather than resolving `$host` itself. If you run an internal CA, invert the filter to allow only your CA's private range. If you never relied on auto-fetching (you always supplied the full chain, or loaded the relevant intermediates via `addCA()`), no change is needed and you should leave the callback unset.
 
 ### `validateDate()` removal
 

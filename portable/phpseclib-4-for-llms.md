@@ -308,10 +308,14 @@ $x509->validateURL('https://example.com/');
 // Tunables (all static):
 X509::setTargetValidationDate('2025-01-01');
 X509::setRecurLimit(5);                      // intermediate-fetch recursion cap; -1 = unlimited
-X509::disableURLFetch();                     // do not auto-download intermediates
 X509::ignoreKeyUsage();                      // skip keyUsage check on issuer
 X509::ignoreBasicConstraints();              // skip basicConstraints check
 X509::setCRLLookupCallback(function (string $url, BigInteger $serial): bool { /* ... */ });
+// AIA intermediate fetching is OFF by default in 4.0 (was auto-on in 3.0;
+// disableURLFetch()/enableURLFetch() are gone). Opt in with a destination gate:
+// phpseclib resolves the host, connects to that resolved $ip, and asks the
+// callback to allow/deny it. Judge $ip — never re-resolve $host.
+X509::setURLFetchCallback(function (string $host, string $ip, int $port, string $scheme): bool { /* ... */ });
 ```
 
 CSR and SPKAC are always self-signed, so their `validateSignature()` takes no setup.

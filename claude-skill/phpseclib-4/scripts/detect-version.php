@@ -329,6 +329,19 @@ $patterns = [
         'message' => 'decodeBER()[0] indexing — 4.0 returns the top-level structure directly',
         'suggestion' => 'Drop the `[0]` index. `ASN1::decodeBER()` in 4.0 returns the structure itself, not wrapped in a one-element array.',
     ],
+    [
+        // 3.0 signatureSubject idiom: slicing the signed region out of the raw DER
+        // by offset/length from decodeBER() output. In 4.0 the Constructed retains
+        // its own bytes, so the sub-structure hands them to you directly. The
+        // decodeBER()[0] pattern above misses this because the substr() call is
+        // usually on a different line from the decodeBER() call.
+        'regex' => '/\bsubstr\s*\([^;]*\[\s*[\'"]start[\'"]\s*\][^;]*\[\s*[\'"]length[\'"]\s*\]/',
+        'version' => '3.0',
+        'category' => 'method',
+        'severity' => 'warn',
+        'message' => 'substr() by [\'start\']/[\'length\'] over decodeBER output — 3.0 signatureSubject idiom',
+        'suggestion' => 'In 4.0 the Constructed retains its original encoding, so ask for it directly: `$cert[\'tbsCertificate\']->getEncoded()` returns the exact signed region. No offset-slicing of the source DER needed.',
+    ],
 
     // ---- Return-value checks that imply 3.0 idioms ----
     [
@@ -390,6 +403,16 @@ $patterns = [
         'severity' => 'error',
         'message' => 'validateDate() — removed in 4.0',
         'suggestion' => 'The date check is now part of `validateSignature()`. Use `X509::setTargetValidationDate($date)` first to check against a custom date.',
+    ],
+
+    // ---- URL-fetch toggles (removed; AIA fetching is now opt-in) ----
+    [
+        'regex' => '/->\s*(?:disableURLFetch|enableURLFetch)\s*\(|\bX509::\s*(?:disableURLFetch|enableURLFetch)\s*\(/',
+        'version' => '3.0',
+        'category' => 'removed-api',
+        'severity' => 'error',
+        'message' => 'disableURLFetch()/enableURLFetch() — removed in 4.0 (AIA intermediate fetching is now off by default)',
+        'suggestion' => 'Both methods are gone. If this was disableURLFetch(), just delete the call — fetching is already off by default in 4.0. If this was enableURLFetch(), note that automatic AIA fetching no longer happens at all: register `X509::setURLFetchCallback(fn(string $host, string $ip, int $port, string $scheme): bool => ...)` to opt back in and gate which destinations phpseclib may connect to. Judge the resolved $ip; do not re-resolve $host.',
     ],
 
     // ---- getExtension return-shape change ----
