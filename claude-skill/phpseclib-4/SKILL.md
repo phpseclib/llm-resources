@@ -240,6 +240,8 @@ $pfx->sign($x509);   // copies issuer DN + authorityKeyIdentifier from PFX's CA 
 
 If you `PFX::load()` an encrypted PFX without a password, expect `phpseclib4\Exception\PasswordNeededException`.
 
+`setPassword('')` (empty string) is phpseclib's default when no password is given. A truly passwordless PFX — from `removePassword()`, or created/loaded with no password — has no [MAC](https://en.wikipedia.org/wiki/Message_authentication_code) (the integrity MAC's key is derived from the password, so no password means no MAC) and no encryption. Such files are not widely supported by other software: OpenSSL and LibreSSL refuse to load a MAC-less PFX unless you pass `-nomacver`, and .NET's certificate loader fails on Linux/macOS. Fine for dev/testing, rarely what you want otherwise. See [this Feb 2022 OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html) and [this Aug 2016 .NET issue](https://github.com/dotnet/runtime/issues/18254).
+
 ### 7. CMS (Cryptographic Message Syntax) — new in 4.0
 
 CMS is a wrapper format for signing, encrypting, digesting, or compressing files. There was no CMS support in 3.0, so this is purely a 4.0 topic — never something to migrate.

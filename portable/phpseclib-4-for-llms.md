@@ -248,6 +248,8 @@ $pfx->sign($x509);   // signs as a CA, copies issuer DN + AKI from PFX's cert
 
 An encrypted PFX loaded without a password throws `phpseclib4\Exception\PasswordNeededException`. There is no migration path from 3.0 PFX code; treat it like CMS — purely a 4.0 topic.
 
+`setPassword('')` (empty string) is phpseclib's default when no password is given. A truly passwordless PFX — from `removePassword()`, or created/loaded with no password — has no MAC (the integrity MAC's key is derived from the password, so no password means no MAC) and no encryption. Such files are not widely supported by other software: OpenSSL and LibreSSL refuse to load a MAC-less PFX unless you pass `-nomacver`, and .NET's certificate loader fails on Linux/macOS. Fine for dev/testing, rarely what you want otherwise. See [this Feb 2022 OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html) and [this Aug 2016 .NET issue](https://github.com/dotnet/runtime/issues/18254).
+
 ### 7. CMS — new in 4.0
 
 CMS (Cryptographic Message Syntax, also known as PKCS7) wraps content for signing, encrypting, digesting, or compressing. There was no CMS support in 3.0, so this is purely a 4.0 topic — never something to migrate.
