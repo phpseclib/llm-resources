@@ -273,6 +273,21 @@ For raw access to the SPKI bytes when the helper can't parse them:
 $spki = $x509['tbsCertificate']['subjectPublicKeyInfo'];
 ```
 
+### What the `subjectPublicKeyInfo` slot actually holds
+
+When the key parses, `$x509['tbsCertificate']['subjectPublicKeyInfo']` resolves to a typed `PublicKey` — the same object `getPublicKey()` returns. You do **not** index into `['subjectPublicKey']` in this case; the whole `subjectPublicKeyInfo` slot *is* the key.
+
+When `PublicKeyLoader::load()` can't parse the bytes (the condition that makes `getPublicKey()` throw), that slot is a `phpseclib4\File\ASN1\Constructed` instead, with the ordinary ASN.1 shape underneath it:
+
+```
+[subjectPublicKeyInfo] => Constructed {
+    [algorithm]        => Constructed { [algorithm] => OID { ... } }
+    [subjectPublicKey] => BitString { [value] => ... }
+}
+```
+
+So `subjectPublicKey` is a `BitString`, never a `PublicKey`. To recover the SPKI bytes in the failure case, call `->getEncoded()` on the `subjectPublicKeyInfo` `Constructed`; to get just the key's bit-string content, read the `BitString` under `['subjectPublicKey']`.
+
 ---
 
 ## Extensions
@@ -665,6 +680,24 @@ Key differences:
 - **Used pervasively in 4.0, sparingly in 3.0.** In 3.0 `$special` was an escape hatch for the few fields that needed custom decoding. In 4.0 `$rules` is the *normal* way 4.0's bundled schemas (Certificate, CRL, CMS, etc.) handle anything beyond pure type-driven decoding — including loading public keys, normalizing DNs, and parsing extensions.
 
 If you want 3.0-style "everything decoded up front" behavior in 4.0, you can eagerly walk the structure after `ASN1::map()` and force the `Constructed` objects to materialize. That's a valid migration path for code that depended on the up-front decode and isn't ready to be reorganized around lazy access.
+
+### Primitive values: disambiguating arrays → typed objects
+
+In 3.0, decoded ASN.1 leaf values (as opposed to constructed SEQUENCE/SET nodes) came back as plain PHP primitives — strings, ints, booleans. The one wrinkle: several ASN.1 string types are indistinguishable as PHP strings (UTF8String, PrintableString, IA5String, etc. are all just `string` in PHP), so 3.0 wrapped the value in a single-key array *when the ambiguity actually mattered in context* — `'whatever'` in one place, `['utf8String' => 'whatever']` in another.
+
+In 4.0, every primitive is a typed object instead — `new UTF8String('whatever')`, `new PrintableString('whatever')`, `new Boolean(true)`, and so on. Because the object's class carries the type, there's no more ambiguous case to special-case with an array: you always get an object, consistently.
+
+Converting between string types moves from a static helper to an instance method:
+
+```php
+// 3.0
+$printable = ASN1::convert($string, ASN1::TYPE_UTF8_STRING, ASN1::TYPE_PRINTABLE_STRING);
+
+// 4.0
+$printable = $string->toPrintableString();   // or ->toUTF8String(), ->toIA5String(), etc.
+```
+
+If you have 3.0 code that branches on `is_array($value) && isset($value['utf8String'])` (or similar) to detect which string type it received, replace it with a type check on the object (`$value instanceof UTF8String`) or just call the `to*String()` method you need directly.
 
 ### Other ASN.1 changes
 
