@@ -299,7 +299,7 @@ The `with*` methods all have matching getters:
 | --- | --- |
 | `withHash(string)` | `getHash(): Hash` |
 | `withMGFHash(string)` (RSA only) | `getMGFHash(): Hash` |
-| `withSaltLength(?int)` (RSA only) | `getSaltLength(): int` |
+| `withSaltLength(?int)` (RSA only; affects signing only) | `getSaltLength(): int` |
 | `withLabel(string)` (RSA only) | `getLabel(): string` |
 | `withPadding(int)` (RSA only) | `getPadding(): int` |
 | `withSignatureFormat(string)` (EC, DSA) | `getSignatureFormat(): string` |
@@ -359,10 +359,41 @@ $priv = $priv
     ->withPadding(RSA::SIGNATURE_PSS)
     ->withHash('sha256')               // hash for the signature; default sha256
     ->withMGFHash('sha256')            // hash for the mask generation function; default sha256
-    ->withSaltLength(32);              // salt length in bytes; default = hash output length
+    ->withSaltLength(32);              // salt length in bytes, signing only; default = hash output length
 ```
 
 The minimum key length for PSS depends on the parameters: `getLength()` must be ≥ `8 * (hashBytes + saltBytes + 2)`. For sha256 + 32-byte salt: 528 bits, which 2048 vastly exceeds.
+
+**Salt length discovery — `withSaltLength()` does nothing on the verify side:**
+
+`withSaltLength()` configures signing. Verification ignores it, because phpseclib recovers the salt length from the encoded message instead: PSS lays out the padding as a run of zero bytes terminated by a single `0x01`, so the verifier can find where the padding ends and treat everything after it as the salt, whatever its length. That's salt length discovery, and it is **on by default** as of 4.0.0 (backported to 3.0.57).
+
+```php
+$pub = $pub->withSaltLength(64);     // no effect on verify()
+$pub->verify($message, $sig);        // true for a 32-byte salt, a 64-byte salt, or none at all
+```
+
+It applies to salt lengths that arrive with the key, too, not just hand-set ones: loading an RSASSA-PSS key whose parameters carry a `saltLength` sets it via `withSaltLength()` and `getSaltLength()` will report it, but verification still won't enforce it.
+
+Toggle it process-wide — it's a static, like `enableBlinding()`, not a per-key `with*()`:
+
+```php
+RSA::disableSaltLengthDiscovery();   // verify() enforces the configured salt length again
+RSA::enableSaltLengthDiscovery();    // default
+```
+
+All of this is PSS-only; PKCS1 signatures have no salt.
+
+What `withSaltLength()` still governs, discovery or not:
+
+- the salt actually generated when signing — `$sLen ?? $hLen` bytes from `random_bytes()`
+- the minimum key length check at signing time (the formula above)
+- the `saltLength` parameter written out when serializing a key in `PSS` format
+- what `getSaltLength()` returns
+
+Accepting any salt length on verify is the normal posture for a PSS implementation — OpenSSL's verify path auto-detects as well, and can't be told not to. That's worth knowing before disabling discovery: with it off, phpseclib can no longer hand PSS verification to the OpenSSL engine and falls back to pure PHP, and `RSA::forceEngine('OpenSSL')` in that state throws `BadConfigurationException`. Disable it only when a protocol pins the salt length and you want a mismatch to be a hard failure.
+
+**Version note:** 3.0.56 and earlier have no discovery at all — there, verification uses the configured salt length and rejects a signature whose salt doesn't match it. On those releases `withSaltLength()` on the *verifying* key is load-bearing, and getting it wrong is a plausible cause of an otherwise inexplicable `verify()` failure. On 3.0.57+ / 4.0.0 with defaults, it never is.
 
 **Configuring PKCS1:**
 
