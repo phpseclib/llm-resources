@@ -1197,70 +1197,166 @@ Both protocols have known security warts compared to SFTP. OpenSSH 8.0+ defaults
 ```php
 use phpseclib4\Net\SFTP\Stream;
 
-Stream::register();        // registers the 'sftp://' protocol
+Stream::register();        // registers 'sftp://' — returns true on success, false on failure
 Stream::register('sftp2'); // or under a custom protocol name
 ```
+
+`register()` returns a bool rather than throwing: `false` means the protocol name was already taken (by phpseclib, by another library, or by PHP itself). Check it if the protocol name is dynamic.
 
 After registering, PHP's filesystem functions work over SFTP:
 
 ```php
-$contents = file_get_contents('sftp://alice:password@host//etc/hostname');
-file_put_contents('sftp://alice:password@host//tmp/out.txt', $data);
-copy('/local.txt', 'sftp://alice:password@host//remote.txt');
+$contents = file_get_contents('sftp://alice:password@host/etc/hostname');
+file_put_contents('sftp://alice:password@host/tmp/out.txt', $data);
+copy('/local.txt', 'sftp://alice:password@host/remote.txt');
+print_r(scandir('sftp://alice:password@host/root/'));
 
-$dir = dir('sftp://alice:password@host//var/log');
+$dir = dir('sftp://alice:password@host/var/log');
 while (($file = $dir->read()) !== false) {
     echo $file, "\n";
 }
 $dir->close();
 ```
 
-Note the double slash before the absolute path: `sftp://user:pass@host//absolute/path`. The first slash terminates the host portion; the second is the leading slash of the absolute path. For paths relative to the user's home: `sftp://user:pass@host/relative/path` (single slash).
+There are three ways to authenticate, covered below. Credentials-in-the-URL is the simplest but only supports passwords; the other two both support public keys.
 
-### Authentication via context
+### 1. Credentials in the URL (password only)
 
-For anything beyond username + password, pass credentials via a stream context:
+`sftp://username:password@host/path` as shown above. There is no way to express a private key in a URL, so **this form does not work with public key authentication** — reach for one of the next two instead.
+
+### 2. A pre-authenticated `SFTP` object in the URL
+
+The easiest route to public key auth. Log in yourself, then interpolate the object where the host would go:
 
 ```php
 use phpseclib4\Crypt\PublicKeyLoader;
+use phpseclib4\Net\SFTP;
+use phpseclib4\Net\SFTP\Stream;
 
-$key = PublicKeyLoader::load(file_get_contents('id_ed25519'));
+Stream::register('sftp');
 
-$ctx = stream_context_create([
-    'sftp' => [
-        'username' => 'alice',
-        'privkey'  => $key,        // accepts a phpseclib4 PrivateKey
-    ],
-]);
+$sftp = new SFTP('terrafrost.com', 22);  // port is optional
+$sftp->login('root', PublicKeyLoader::load(file_get_contents('terrafrost.pem')));
 
-$contents = file_get_contents('sftp://host//etc/hostname', false, $ctx);
+print_r(scandir("sftp://$sftp/root/"));
 ```
 
-Pass an existing connected `SFTP` instance via `'session'` or `'sftp'` to skip the connect/login step entirely (the wrapper reuses your connection):
+Interpolating the object into the string casts it via `__toString()`, which yields a token the wrapper resolves back to that live session. The connection and login have already happened, so the wrapper does neither.
+
+### 3. A stream context
+
+The most flexible form, and the only one that supports notifications:
 
 ```php
-$ctx = stream_context_create(['sftp' => ['session' => $existingSftp]]);
-file_put_contents('sftp://host//tmp/out.txt', $data, 0, $ctx);
+use phpseclib4\Crypt\PublicKeyLoader;
+use phpseclib4\Net\SFTP\Stream;
+
+$protocol = 'sftp';
+Stream::register($protocol);
+
+$options = [$protocol => [
+    'username' => 'root',
+    'privkey'  => PublicKeyLoader::load(file_get_contents('terrafrost.pem')),
+]];
+
+$context = stream_context_create($options);
+print_r(scandir($protocol . '://terrafrost.com/root/', context: $context));
 ```
 
-### Connection reuse
+Note that the context array is keyed by the **protocol name you registered**, so if you registered as `sftp2` the key must be `sftp2` too.
 
-The wrapper caches `SFTP` instances keyed by `(host, port, username, password/key)`. Repeated `file_get_contents()` calls with the same URL reuse one underlying connection — useful when iterating over many files. The cache is process-global (a static class property), so it persists across function boundaries.
+Recognized keys:
+
+| Key | Meaning |
+| --- | --- |
+| `username` | Login username |
+| `password` | Login password |
+| `privkey` | A phpseclib4 `PrivateKey` (from `PublicKeyLoader::load()`) |
+| `session` / `sftp` | An existing `SFTP` instance — either key works, they're aliases |
+
+#### Passing an existing session via context
+
+```php
+$options = ['sftp' => ['session' => new SFTP('terrafrost.com')]];
+```
+
+If `session` (or `sftp`) is set and holds an `SFTP` instance, **the wrapper assumes you have already logged in** and ignores `username`, `password`, and `privkey` entirely. Supply one or the other — a session, *or* credentials — never both, or the credentials will be silently discarded.
+
+Because the session already knows where it's connected, the host portion of the URL becomes decorative in this mode: `"$protocol://dummy/root"` works just as well as `"$protocol://terrafrost.com/root"`, even though the actual server is `terrafrost.com`. The path is still parsed normally; only the host is ignored.
+
+### Setting a default context
+
+To avoid threading `$context` through every filesystem call:
+
+```php
+$protocol = 'sftp';
+Stream::register($protocol);
+
+$options = [$protocol => [
+    'username' => 'root',
+    'privkey'  => PublicKeyLoader::load(file_get_contents('terrafrost.pem')),
+]];
+
+stream_context_set_default($options);
+
+print_r(scandir($protocol . '://terrafrost.com/root/'));   // no context argument
+```
+
+Every subsequent filesystem call on that protocol picks the credentials up automatically. **Notifications cannot be defaulted this way** — `stream_context_set_default()` only takes the options array, not the params array, so a `notification` callback has to go through an explicit `stream_context_create()` context passed per call.
 
 ### Stream notifications
 
-PHP's `STREAM_NOTIFY_*` callbacks work if you provide a `notification` callable in the context, mirroring the FTP wrapper's behavior:
+Provide a `notification` callable in the context's *params* (the second argument to `stream_context_create()`, not the first), mirroring the FTP wrapper's behavior:
 
 ```php
-$ctx = stream_context_create([
-    'sftp' => ['username' => 'alice', 'password' => 'pass'],
-    'notification' => function (int $code, int $severity, string $msg, ...): void {
-        // STREAM_NOTIFY_CONNECT, STREAM_NOTIFY_AUTH_REQUIRED, STREAM_NOTIFY_AUTH_RESULT,
-        // STREAM_NOTIFY_PROGRESS, STREAM_NOTIFY_FAILURE
-    },
-]);
+// signature per https://www.php.net/manual/en/function.stream-notification-callback.php
+function stream_notification_callback($notification_code, $severity, $message, $message_code, $bytes_transferred, $bytes_max) {
+    switch ($notification_code) {
+        case STREAM_NOTIFY_RESOLVE:
+        case STREAM_NOTIFY_AUTH_REQUIRED:
+        case STREAM_NOTIFY_COMPLETED:
+        case STREAM_NOTIFY_FAILURE:
+        case STREAM_NOTIFY_AUTH_RESULT:
+            var_dump($notification_code, $severity, $message, $message_code, $bytes_transferred, $bytes_max);
+            break;
+        case STREAM_NOTIFY_REDIRECTED:
+            echo 'Being redirected to: ', $message;
+            break;
+        case STREAM_NOTIFY_CONNECT:
+            echo 'Connected...';
+            break;
+        case STREAM_NOTIFY_FILE_SIZE_IS:
+            echo 'Got the filesize: ', $bytes_max;
+            break;
+        case STREAM_NOTIFY_MIME_TYPE_IS:
+            echo 'Found the mime-type: ', $message;
+            break;
+        case STREAM_NOTIFY_PROGRESS:
+            echo 'Made some progress, downloaded ', $bytes_transferred, ' so far';
+            break;
+    }
+    echo "\n";
+}
+
+$protocol = 'sftp';
+Stream::register($protocol);
+
+$options = [$protocol => [
+    'username' => 'root',
+    'privkey'  => PublicKeyLoader::load(file_get_contents('terrafrost.pem')),
+]];
+$notifications = ['notification' => 'stream_notification_callback'];
+
+$context = stream_context_create($options, $notifications);
+print_r(scandir($protocol . '://terrafrost.com/root/', context: $context));
 ```
+
+`STREAM_NOTIFY_FILE_SIZE_IS` plus `STREAM_NOTIFY_PROGRESS` is the wrapper's substitute for `SFTP::get()`'s progress callback — coarser, but it's the only progress signal available through the filesystem functions.
+
+### Connection reuse
+
+The wrapper caches `SFTP` instances keyed by `(host, port, username, password/key)`. Repeated `file_get_contents()` calls with the same URL reuse one underlying connection — useful when iterating over many files. The cache is process-global (a static class property), so it persists across function boundaries. Passing your own session via the URL or the context sidesteps the cache entirely; you own that connection's lifetime.
 
 ### Limitations
 
-The wrapper is convenient but loses access to phpseclib's richer API. You can't pass a progress callback to a `file_get_contents()`-over-SFTP call, you can't set `RESUME` flags, you can't access `getErrors()` after a recursive operation. For anything beyond "open this remote file like a local one," use the `SFTP` class directly.
+The wrapper is convenient but loses access to phpseclib's richer API. You can't pass a per-transfer progress callback (only the coarser `STREAM_NOTIFY_PROGRESS`), you can't set `RESUME` flags, and you can't access `getErrors()` after a recursive operation. For anything beyond "open this remote file like a local one," use the `SFTP` class directly.

@@ -530,7 +530,7 @@ This SKILL.md is enough for ~90% of phpseclib 4.0 tasks. Load a reference only w
 - `references/migration-3-to-4.md` — full 3.0 → 4.0 method/class mapping table. Load when migrating non-trivial code.
 - `references/x509.md`, `references/csr.md`, `references/crl.md`, `references/pfx.md`, `references/spkac.md` — full API reference for each file class. Load when working in depth with that specific format.
 - `references/cms.md` — full CMS API: `SignedData`, `EncryptedData`, `DigestedData`, `CompressedData`, signers, ESS attributes, detached signatures, finding signers by certificate. Load when the user is doing CMS / PKCS7 work.
-- `references/ssh2-sftp.md` — full SSH2 / SFTP API with the 4.0 exception model and recursive-error handling. Load when the user is doing SSH2 or SFTP work beyond a single command.
+- `references/ssh2-sftp.md` — full SSH2 / SFTP API with the 4.0 exception model and recursive-error handling, plus the `SFTP\Stream` wrapper (`sftp://` URLs, stream contexts, public key auth through the wrapper). Load when the user is doing SSH2 or SFTP work beyond a single command, or any work with `sftp://` URLs and PHP's filesystem functions.
 - `references/asn1-constructed.md` — deep dive on `ASN1\Constructed`, encoding/decoding, cache invalidation, custom maps. Load when the user is doing low-level ASN.1 work or extending phpseclib.
 - `references/distinguished-names.md` — every DN format constant, multi-valued RDN handling, postal addresses. Load only when the DN work is non-trivial.
 
