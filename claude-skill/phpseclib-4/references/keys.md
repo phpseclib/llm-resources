@@ -118,6 +118,27 @@ $public  = PublicKeyLoader::loadPublicKey($bytes);              // throws if it'
 
 Both throw `NoKeyLoadedException` if the loaded result is the wrong direction. The variants are useful when an API contract says "we expect a private key here" — catching the right type at the boundary is cleaner than checking `instanceof` later.
 
+**These variants also help static analysis.** `PublicKeyLoader::load()` is declared as returning `AsymmetricKey`, which is all a static analyzer can know — so `$key->sign(...)` on the result draws an `UndefinedMethod` error, since a `PublicKey` has no `sign()`, and `$key->getCurve()` draws one too, since an `RSA` key has no curve. Using `loadPrivateKey()` narrows the declared return type to `PrivateKey` and makes `sign()` analyzable for free.
+
+When you need an algorithm-specific method (`getCurve()`, RSA's `encrypt()` / `decrypt()`), the right guard depends on where the key came from:
+
+```php
+// Untrusted or user-supplied key: the check is real, keep it.
+$key = PublicKeyLoader::loadPrivateKey($upload);
+if (!$key instanceof EC\PrivateKey) {
+    throw new \DomainException('an EC key is required here');
+}
+$curve = $key->getCurve();
+
+// Hardcoded key (fixtures, tests, pinned keys): the type is already determined
+// by the literal. An assert() here appeases the analyzer without adding a check
+// that can ever fail — prefer a docblock, or suppress at the call site.
+/** @var RSA\PrivateKey $key */
+$key = PublicKeyLoader::loadPrivateKey(self::FIXTURE_PEM);
+```
+
+The same reasoning applies to `CMS::load()`, whose subclass depends on the parsed `contentType`, and to `ASN1::map()` — see `references/asn1-constructed.md`.
+
 ### Array inputs
 
 `PublicKeyLoader::load()` accepts an array for "raw" components. The most common case is RSA-from-components:
@@ -196,7 +217,7 @@ namespace phpseclib4\Crypt\Common;
 
 interface PrivateKey
 {
-    public function sign(string|Signable $source): string;
+    public function sign(string|Signable $source): string|array;
     public function getPublicKey(): PublicKey;
     public function toString(string $type, array $options = []): array|string;
     public function withPassword(?string $string = null): PrivateKey;
@@ -204,7 +225,7 @@ interface PrivateKey
 
 interface PublicKey
 {
-    public function verify(string $message, string $signature): bool;
+    public function verify(string $message, string|array $signature): bool;
     public function toString(string $type, array $options = []): array|string;
     public function getFingerprint(string $algorithm = 'sha256'): string;
 }
@@ -218,6 +239,26 @@ RSA `PrivateKey` and `PublicKey` additionally implement `decrypt()` / `encrypt()
 
 - **String mode**: returns the raw signature bytes.
 - **Signable mode**: also installs the signature into the passed object as a side effect, and returns the bytes. For X.509 cert creation you usually want `$priv->sign($x509); echo $x509;` — see SKILL.md's signing idiom for the full picture.
+
+**Why the return type is `string|array`.** Every signature format returns a string *except* `Raw`, which returns `['r' => BigInteger, 's' => BigInteger]`. `verify()` is symmetric: it takes `string|array` and the two sides have to agree.
+
+```php
+$priv = $priv->withSignatureFormat('Raw');
+$sig  = $priv->sign($message);              // array, not string
+$ok   = $priv->getPublicKey()->verify($message, $sig);
+```
+
+The pairing is enforced, not merely conventional — a mismatch throws `phpseclib4\Exception\UnexpectedValueException`:
+
+| Format on the key | Signature passed to `verify()` | Result |
+| --- | --- | --- |
+| `Raw` | `string` | throws — Raw signatures must be arrays |
+| `ASN1` / `IEEE` / `SSH2` | `array` | throws — only Raw accepts arrays |
+| RSA (any format) | `array` | throws — RSA has no Raw signature format |
+
+So a `Raw` signature must be verified by a key that is *also* in `Raw` mode. `withSignatureFormat()` is an immutable setter like every other `with*()`, and `getPublicKey()` carries the format over from the private key, so the round trip above works — but a public key loaded separately from a PEM defaults to `ASN1` and will throw on an array.
+
+Practical consequence for any code that stores or transmits signatures: `Raw` output can't be `echo`'d, concatenated, or base64-encoded. Doing so raises PHP's "Array to string conversion" notice and yields the literal string `Array`. `Raw` is for when you need `r` and `s` as `BigInteger`s to feed into something else; for wire formats use `IEEE` (JWT / WebCrypto), `ASN1` (X.509), or `SSH2`.
 
 For raw byte signing — the focus of this reference — string mode is what you want:
 
@@ -265,6 +306,8 @@ The `with*` methods all have matching getters:
 | `withContext(?string)` (EC Ed25519/Ed448 only) | `getContext(): string` |
 | `withPassword(?string)` | (no getter — passwords aren't exposed) |
 
+Passwords aren't exposed in stack traces either. Parameters that take passwords or key material are marked with PHP's [`#[\SensitiveParameter]`](https://www.php.net/manual/en/class.sensitiveparameter.php) attribute, so on PHP 8.2+ an exception thrown out of `withPassword()`, `PublicKeyLoader::load()`, and friends renders the argument as `Object(SensitiveParameterValue)` instead of the literal password. On PHP 8.1 the attribute is inert (it parses as an ordinary attribute and does nothing), so the redaction is a bonus of running 8.2+, not something to rely on there. phpseclib 3.0 has no such marking at all — if your application logs exception traces, this is a concrete reason to prefer 4.0 over the compat shim for code paths that handle key passwords.
+
 Getters for hash-like properties return `Hash` instances rather than strings; cast to string with `(string)` if you want the name:
 
 ```php
@@ -290,6 +333,8 @@ $pub  = $priv->getPublicKey();
 RSA::setExponent(65537);          // default; 65537 is standard. Some legacy tools use 37 or 3.
 RSA::setSmallestPrime(4096);      // default; lower this for multi-prime RSA
 ```
+
+**Leave the exponent alone unless you have a specific interop reason.** RSA requires the totient of the two primes to be relatively prime to the exponent. Since the exponent is itself prime in practice, the only way that fails is if the totient is a multiple of it — and the smaller the exponent, the likelier that is. So a small exponent (PuTTY used 37 until Feb 2020; 3 shows up in old hardware) meaningfully increases how often key generation has to throw away its primes and start over. That regeneration path carried a state-reset bug for roughly six years; it's fixed in 4.0.0 and backported to 3.0, but anyone on an older point release who lowers the exponent can still hit it. There is no security or performance argument for 37 over 65537 either way.
 
 Multi-prime RSA: `RSA::setSmallestPrime(256)` before `createKey(2048)` produces an 8-prime, 2048-bit key. Generation is much faster (eight 256-bit primes vs. two 1024-bit primes), but interoperability is lower — most tools only handle 2-prime RSA. Useful when generating keys is the bottleneck and you control both sides.
 
@@ -441,7 +486,7 @@ Four signature formats:
 - **ASN1** (default) — RFC 3279 SEQUENCE-of-INTEGER. What X.509 certs use. Variable-length.
 - **SSH2** — RFC 4253 / draft-ietf-curdle-ssh-ed25519 wire format.
 - **IEEE** — fixed-length concatenation of `r` and `s` (P1363 / IEEE 1363). What JWT (JWS) and the WebCrypto API use.
-- **Raw** — returns an array `['r' => BigInteger, 's' => BigInteger]` instead of a string.
+- **Raw** — returns an array `['r' => BigInteger, 's' => BigInteger]` instead of a string. The verifying key must be in `Raw` mode too, or `verify()` throws — see [`PublicKey` vs `PrivateKey` interfaces](#publickey-vs-privatekey-interfaces).
 
 For JWT (JWS) you almost always want `IEEE`:
 
@@ -542,7 +587,7 @@ $sig = $priv->sign($message);
 $ok  = $priv->getPublicKey()->verify($message, $sig);
 ```
 
-Same three formats as EC: `ASN1` (default), `SSH2`, `Raw` (returns `['r', 's']` array). No `IEEE` format for DSA (it's not used in JWT for DSA — JWT only does ECDSA via JWS).
+Same three formats as EC: `ASN1` (default), `SSH2`, `Raw` (returns `['r', 's']` array; the verifying key must be in `Raw` mode too, or `verify()` throws). No `IEEE` format for DSA (it's not used in JWT for DSA — JWT only does ECDSA via JWS).
 
 ### Components
 
@@ -889,4 +934,5 @@ Patterns that look reasonable but produce bugs:
 7. **Storing the DH shared secret directly as a symmetric key.** Always run it through a KDF or at least a hash.
 8. **Multi-prime RSA assuming interop.** Most tools only handle 2-prime. Don't `setSmallestPrime(256)` unless you control both sides.
 9. **PuTTY v3 against an older puttygen.** v3 requires puttygen 0.75+ (Sept 2021). v2 is still the safer default.
-10. **`asPrivateKey()` for performance.** It works for sign/decrypt but lacks CRT data, so it's slower than a key loaded as a full private key. Useful for correctness; not a performance shortcut.
+10. **Treating a `Raw` signature as a string.** `withSignatureFormat('Raw')` makes `sign()` return `['r' => BigInteger, 's' => BigInteger]`. `echo`-ing, concatenating, or base64-encoding that gives you the literal `Array`. Verification is symmetric — a `Raw` signature needs a key that's also in `Raw` mode, or `verify()` throws `UnexpectedValueException`. Use `IEEE`, `ASN1`, or `SSH2` for anything that goes over a wire or into storage.
+11. **`asPrivateKey()` for performance.** It works for sign/decrypt but lacks CRT data, so it's slower than a key loaded as a full private key. Useful for correctness; not a performance shortcut.

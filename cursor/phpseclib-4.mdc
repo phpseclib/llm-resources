@@ -58,7 +58,9 @@ $pfx->sign($x509);
 echo $x509;
 ```
 
-The interface: `interface PrivateKey { public function sign(string|Signable $message): string; }`. `sign()` always returns a string (the raw signature). When `$message` is a `Signable` (`X509`, `CSR`, `CRL`, `CMS\SignedData`, `CMS\SignedData\Signer`), the key additionally installs the signature back into the object as a side effect.
+The interface: `interface PrivateKey { public function sign(string|Signable $message): string|array; }`. `sign()` returns the raw signature. When `$message` is a `Signable` (`X509`, `CSR`, `CRL`, `CMS\SignedData`, `CMS\SignedData\Signer`), the key additionally installs the signature back into the object as a side effect.
+
+The return type is a union for one reason: EC and DSA keys set to `withSignatureFormat('Raw')` return `['r' => BigInteger, 's' => BigInteger]` rather than bytes. `ASN1`, `IEEE`, and `SSH2` all return strings, as does RSA in every mode. `verify()` mirrors this — `verify(string $message, string|array $signature)` — and the two sides must match: a string handed to a `Raw`-mode key, or an array handed to any other, throws `phpseclib4\Exception\UnexpectedValueException`. Assume string unless `Raw` was explicitly requested.
 
 **String mode still works in 4.0.** `$privKey->sign('raw bytes')` returns a signature over those bytes, same as 3.0. The Signable overload is additive; existing 3.0 raw-byte signing code does not need to be rewritten.
 
@@ -273,6 +275,17 @@ PFX, CMS: brand new in 4.0; no 3.0 equivalent. If 3.0 code does PKCS12 or CMS wo
 11. **Building PKCS12 by hand or via OpenSSL shellouts** in 4.0 — use the `PFX` class (new in 4.0).
 12. **`phpseclib4\Crypt\Random` or `Random::string()`** — does not exist; use `random_bytes()`.
 13. **String-matching `getDN()` output** — `DN_STRING` format changed between 3.0 (`C=US, O=Acme/CN=…`) and 4.0 (`C = US, O = Acme, CN = …`). Use `getSubjectDNProps('CN')` or `getSubjectDN(ASN1::DN_OPENSSL)` for structured access.
+14. **Treating a `Raw` signature as a string** — after `withSignatureFormat('Raw')`, `sign()` returns `['r' => BigInteger, 's' => BigInteger]`; `echo` or `base64_encode` on it yields the literal `Array`. The verifying key must be in `Raw` mode too. Use `IEEE`, `ASN1`, or `SSH2` for anything serialized.
+
+## Static analysis
+
+`PublicKeyLoader::load()` (declared `AsymmetricKey`), `CMS::load()` (declared `CMS`), and `ASN1::map()` (declared `Element|BaseType`) are polymorphic by input, so psalm and phpstan report `UndefinedMethod` on their results. Don't paper over this with guards that can't fail:
+
+- Input is untrusted (uploaded key, parsed message) → the `instanceof` check is real. Keep it and handle the else branch.
+- Input is hardcoded (fixtures, pinned keys, a `Maps\*` constant) → the type is already determined. Use a `/** @var X */` docblock or a suppression, not `assert()`.
+- Prefer `PublicKeyLoader::loadPrivateKey()` / `loadPublicKey()` over `load()` when the direction is known — they declare the narrower type and need no annotation.
+
+For `ASN1::map()`-heavy code, suppressing `UndefinedMethod` project-wide is defensible; phpseclib does exactly that in its own `psalm.xml` rather than adding asserts everywhere.
 
 ## Style preferences
 

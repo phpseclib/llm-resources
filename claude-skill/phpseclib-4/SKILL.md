@@ -160,12 +160,14 @@ namespace phpseclib4\Crypt\Common;
 
 interface PrivateKey
 {
-    public function sign(string|Signable $message): string;
+    public function sign(string|Signable $message): string|array;
     // ...
 }
 ```
 
-`sign()` always returns a `string` — that's the raw signature, regardless of whether you passed a string or a `Signable`. When you pass a `Signable`, the key additionally installs the signature back into the object as a side effect (which is why `echo $x509` afterwards prints the signed cert).
+`sign()` returns the raw signature regardless of whether you passed a string or a `Signable`. When you pass a `Signable`, the key additionally installs the signature back into the object as a side effect (which is why `echo $x509` afterwards prints the signed cert).
+
+The return type is `string|array` for one reason: EC and DSA keys set to `withSignatureFormat('Raw')` return `['r' => BigInteger, 's' => BigInteger]` instead of bytes. Every other format (`ASN1`, `IEEE`, `SSH2`) returns a string, and RSA always does. `verify()` is symmetric — `verify(string $message, string|array $signature)` — and the two sides must agree: passing a string to a `Raw`-mode key, or an array to anything else, throws `phpseclib4\Exception\UnexpectedValueException`. Assume `string` in generated code unless the user has explicitly asked for `Raw`; see `references/keys.md` for the round-trip rules.
 
 **String mode still works in 4.0.** Calling `$privKey->sign('arbitrary bytes')` produces a signature over those bytes, exactly as in 3.0. The `Signable` overload is *additive* — the existing string mode is unchanged. Practical migration consequence: 3.0 code that signs raw byte strings (`$sig = $privKey->sign($data)`) continues to work in 4.0 with no edits. Only the X.509 cert-creation pattern (3.0's `$x509->sign($issuer, $subject)`) needs rewriting, and that wasn't a `$privKey->sign(...)` call to begin with.
 
@@ -408,6 +410,25 @@ The `useBestEngine()` / `useInternalEngine()` / `getEngine()` methods were renam
 
 `phpseclib3\Crypt\Random` and its `Random::string()` method existed because PHP 5.6 had no built-in CSPRNG. PHP 7.0+ has `random_bytes()`, which 4.0 uses directly. Replace any `Random::string($n)` call with `random_bytes($n)`. There is no `phpseclib4\Crypt\Random`.
 
+### Static analysis (psalm / phpstan)
+
+phpseclib 4.0 is fully type-hinted, but three of its entry points are *polymorphic by input* in a way no analyzer can follow. Expect `UndefinedMethod` errors around them, and don't "fix" them by adding runtime checks that can never fail:
+
+| Call | Declared return | What you actually get |
+| --- | --- | --- |
+| `PublicKeyLoader::load()` | `AsymmetricKey` | RSA / EC / DSA, public or private, depending on the bytes |
+| `CMS::load()` | `CMS` | `SignedData` / `EncryptedData` / `DigestedData` / `CompressedData`, depending on `contentType` |
+| `ASN1::map()` | `Element\|BaseType` | `Constructed` for a SEQUENCE map, a leaf type (`UTF8String`, etc.) otherwise |
+
+The distinction that matters is where the input came from:
+
+- **Untrusted input** (an uploaded key, a parsed message) — the `instanceof` guard is a real check. Write it, and branch or throw on the unexpected case.
+- **Hardcoded input** (fixtures, pinned keys, a `Maps\*` constant passed to `ASN1::map()`) — the type is already determined by the literal, so a guard is `assert(is_bool($found))` after `$found = false`. Prefer a `/** @var X */` docblock, or suppress.
+
+For `ASN1::map()` specifically, the second argument is nearly always a hardcoded map constant, which fully determines whether a `Constructed` comes back — so asserting after every call is a lot of noise for no safety. phpseclib's own `psalm.xml` suppresses `UndefinedMethod` rather than littering the source with asserts, and that's a reasonable posture for downstream code that leans on `ASN1::map()` too. A real test suite catches genuinely undefined methods.
+
+Prefer the narrowing entry points where they exist — `PublicKeyLoader::loadPrivateKey()` / `loadPublicKey()` declare `PrivateKey` / `PublicKey` and make `sign()` analyzable without any annotation at all.
+
 ## Common 3.0 → 4.0 migration patterns
 
 These are the most frequent X.509 / CSR / CRL rewrites. Library-wide changes (SFTP arg order, exceptions, error reporting, etc.) are covered in the previous section. The full table is in `references/migration-3-to-4.md`.
@@ -521,7 +542,8 @@ When generating or reviewing 4.0 code, watch for these — they are the half-mig
 11. **Building a PKCS12 by hand or via OpenSSL shellouts** when working in 4.0. Use the `PFX` class — it's new in 4.0 and replaces all the manual orchestration you may have inherited from 3.0 code.
 12. **Using `\phpseclib4\Crypt\Random` or `Random::string()`.** That class does not exist in 4.0. Use `random_bytes()`.
 13. **String-matching `getDN()` output.** The `DN_STRING` format changed between 3.0 (`C=US, O=Acme/CN=…`) and 4.0 (`C = US, O = Acme, CN = …`), so `strpos($x509->getDN(), '/CN=…')` and similar patterns silently break. Use `getSubjectDNProps('CN')` or `getSubjectDN(ASN1::DN_OPENSSL)` for structured access instead.
-14. **Expecting `validateSignature()` to auto-download missing intermediates.** In 3.0 it did (following the AIA `caIssuers` URL automatically — which was also an SSRF risk). In 4.0 that's off by default: if you hand it a leaf without its chain and only have roots loaded, validation fails with an untrusted-issuer error unless you've registered `X509::setURLFetchCallback(...)` to opt in. Migrated code that relied on the silent auto-fetch needs the callback added. Also do not reach for `disableURLFetch()`/`enableURLFetch()` — both are gone in 4.0.
+14. **Assuming `sign()` returns a string after `withSignatureFormat('Raw')`.** Raw returns `['r' => BigInteger, 's' => BigInteger]`, so `echo`/`base64_encode` on it yields `Array`, and the verifying key has to be in Raw mode too or `verify()` throws. Every other signature format returns a string.
+15. **Expecting `validateSignature()` to auto-download missing intermediates.** In 3.0 it did (following the AIA `caIssuers` URL automatically — which was also an SSRF risk). In 4.0 that's off by default: if you hand it a leaf without its chain and only have roots loaded, validation fails with an untrusted-issuer error unless you've registered `X509::setURLFetchCallback(...)` to opt in. Migrated code that relied on the silent auto-fetch needs the callback added. Also do not reach for `disableURLFetch()`/`enableURLFetch()` — both are gone in 4.0.
 
 ## When to load deeper references
 

@@ -168,12 +168,22 @@ namespace phpseclib4\Crypt\Common;
 
 interface PrivateKey
 {
-    public function sign(string|Signable $message): string;
+    public function sign(string|Signable $message): string|array;
     // ...
 }
 ```
 
-`sign()` always returns a `string` — the raw signature — regardless of whether you passed a string or a `Signable`. When `$message` is a `Signable`, the key additionally installs the signature back into the object as a side effect, which is why `echo $x509` afterwards prints the signed cert.
+`sign()` returns the raw signature regardless of whether you passed a string or a `Signable`. When `$message` is a `Signable`, the key additionally installs the signature back into the object as a side effect, which is why `echo $x509` afterwards prints the signed cert.
+
+**Why `string|array`.** Every signature format returns a string except `Raw`, which EC and DSA keys can be put into with `withSignatureFormat('Raw')` and which returns `['r' => BigInteger, 's' => BigInteger]` instead. `verify()` is symmetric — `verify(string $message, string|array $signature): bool` — and the two sides have to agree:
+
+```php
+$priv = $priv->withSignatureFormat('Raw');
+$sig  = $priv->sign($message);                          // array
+$ok   = $priv->getPublicKey()->verify($message, $sig);  // OK — format carried over
+```
+
+Passing a string to a `Raw`-mode key, or an array to a key in any other mode (or to RSA, which has no `Raw` signature format), throws `phpseclib4\Exception\UnexpectedValueException`. A public key loaded separately from a PEM defaults to `ASN1`, so it will reject an array unless you put it in `Raw` mode too. Since `Raw` output can't be echoed, concatenated, or base64-encoded, use `IEEE` (JWT / WebCrypto), `ASN1` (X.509), or `SSH2` for anything that goes over a wire; `Raw` is for when you need `r` and `s` as `BigInteger`s. Assume `string` when generating code unless the user asked for `Raw`.
 
 **String mode still works.** `$privKey->sign('arbitrary bytes')` returns a signature over those bytes, exactly as in 3.0. The `Signable` overload is *additive* — existing 3.0 raw-byte signing code continues to work in 4.0 with no edits. Only the X.509 cert-creation pattern needs rewriting, and that wasn't a `$privKey->sign(...)` call in 3.0.
 
@@ -506,6 +516,28 @@ $crl = CRL::load($data);
 11. **Building a PKCS12 by hand or via OpenSSL shellouts** when working in 4.0. Use the `PFX` class — it's new in 4.0 and replaces all the manual orchestration you may have inherited from 3.0 code.
 12. **`phpseclib4\Crypt\Random` or `Random::string()`.** Does not exist in 4.0. Use `random_bytes()`.
 13. **String-matching `getDN()` output.** The `DN_STRING` format changed between 3.0 (`C=US, O=Acme/CN=…`) and 4.0 (`C = US, O = Acme, CN = …`), so `strpos` / regex matches on the 3.0 format silently fail. Use `getSubjectDNProps('CN')` or `getSubjectDN(ASN1::DN_OPENSSL)` instead.
+14. **Treating a `Raw` signature as a string.** After `withSignatureFormat('Raw')`, `sign()` returns `['r' => BigInteger, 's' => BigInteger]`; `echo` or `base64_encode` on that yields the literal `Array`. The verifying key has to be in `Raw` mode too or `verify()` throws. Every other signature format returns a string.
+
+---
+
+## Static analysis (psalm / phpstan)
+
+phpseclib 4.0 is fully type-hinted, but three entry points are polymorphic by input in a way no analyzer can follow:
+
+| Call | Declared return | What you actually get |
+| --- | --- | --- |
+| `PublicKeyLoader::load()` | `AsymmetricKey` | RSA / EC / DSA, public or private, depending on the bytes |
+| `CMS::load()` | `CMS` | `SignedData` / `EncryptedData` / `DigestedData` / `CompressedData`, per `contentType` |
+| `ASN1::map()` | `Element\|BaseType` | `Constructed` for a SEQUENCE map, a leaf type (`UTF8String`, etc.) otherwise |
+
+Expect `UndefinedMethod` errors around all three — a `PublicKey` has no `sign()`, an `RSA` key has no `getCurve()`, a `UTF8String` has no `toArray()`. What to do about it depends on where the input came from:
+
+- **Untrusted input** (uploaded key, parsed message): the `instanceof` guard is a real check. Write it and handle the unexpected case.
+- **Hardcoded input** (fixtures, pinned keys, a `Maps\*` constant passed to `ASN1::map()`): the type is already determined by the literal, so an `assert()` is a check that can never fire. Prefer `/** @var X */` or a suppression.
+
+Prefer the narrowing loaders where they exist: `PublicKeyLoader::loadPrivateKey()` and `loadPublicKey()` declare `PrivateKey` / `PublicKey`, which makes `sign()` analyzable with no annotation at all.
+
+For codebases that lean on `ASN1::map()`, suppressing `UndefinedMethod` project-wide is a defensible posture — it's what phpseclib does in its own `psalm.xml`, on the reasoning that a real test suite catches genuinely undefined methods and the alternative is hundreds of asserts that serve only the analyzer.
 
 ---
 

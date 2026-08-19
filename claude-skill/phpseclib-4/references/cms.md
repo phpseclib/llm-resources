@@ -114,6 +114,8 @@ Whether you need the dispatch through `CMS::load()` or can call a specific subcl
 
 There's no penalty for going through `CMS::load()` — it adds maybe one extra ASN.1 tag parse. Use it as the default.
 
+One consequence of the polymorphic return: static analyzers see the declared `CMS` return type and flag `UndefinedMethod` on every subclass-specific call (`getSigners()`, `getKey()`, and so on). When the input is genuinely arbitrary, the `instanceof` guard shown above is a real check and resolves the error honestly. When the input is a fixture or a file whose type you already know, calling the subclass's own `load()` directly — `CMS\SignedData::load($der)` — gives the analyzer the narrow type for free and is the better shape for tests.
+
 ---
 
 ## SignedData
@@ -470,6 +472,19 @@ $cms->createNewRecipientFromKeyWithIdentifier($kek, $kekId);
 
 echo $cms;
 ```
+
+**The password recipient's algorithm must not be weaker than the content's.** `$encryptionAlgorithm` here is the *key* encryption algorithm — the cipher that wraps the CEK — and it's independent of the algorithm the content was encrypted with. RFC 3211 key wrapping has no room to encode a CEK longer than the KEK, so a mismatch in that direction throws `phpseclib4\Exception\LengthException` ("The content encryption key should be the same length or shorter than the key encryption key"):
+
+```php
+$cms = new CMS\EncryptedData('hello, world!', 'aes256-CBC-PAD');
+$cms->createNewRecipientFromPassword('correct horse battery staple', 'aes128-CBC-PAD');
+// LengthException — 32-byte CEK can't be wrapped by a 16-byte KEK
+
+$cms->createNewRecipientFromPassword('correct horse battery staple', 'aes256-CBC-PAD');
+// fine — equal lengths
+```
+
+Note that the default here (`aes128-CBC-PAD`) matches the `EncryptedData` constructor's default, so the failure only shows up when the content algorithm was upgraded and the recipient's wasn't. If you pass a stronger algorithm to the constructor, pass at least as strong a one to every password recipient.
 
 `createNewRecipientFromX509()` inspects the cert's public key type and produces the right `RecipientInfo`:
 

@@ -144,6 +144,23 @@ Key properties:
 - **Rules fire lazily.** A rule attached to `tbsCertificate.signature` doesn't fire unless someone reads that field. This is how 4.0 avoids decoding the entire structure upfront.
 - **Rules pervade 4.0's bundled schemas.** Where 3.0's `$special` parameter was an escape hatch used for a few special cases, 4.0's `$rules` is the *normal* way phpseclib's own classes (X509, CSR, CRL, CMS) install typed-object decoding on top of the raw ASN.1.
 
+### `map()` and static analysis
+
+The declared return type is `Element|BaseType`, which is as precise as the signature can be: whether you get a `Constructed` or a leaf type depends entirely on the `$mapping` argument. Since `Constructed` has `toArray()`, `offsetGet()`, and the rest of the container API while `UTF8String` has none of it, psalm and phpstan report `UndefinedMethod` on essentially every non-trivial use:
+
+```php
+$cert = ASN1::map($decoded, Maps\Certificate::MAP, $rules);
+$tbs  = $cert['tbsCertificate'];   // UndefinedMethod: BaseType has no offsetGet
+```
+
+In practice the second argument is almost always a hardcoded map constant, so the return type *is* determined — just not in a way an analyzer can see without evaluating the map. Three options, roughly in order of preference:
+
+1. **Suppress `UndefinedMethod` project-wide.** This is what phpseclib itself does in its own `psalm.xml`, on the reasoning that a real unit-test suite catches genuinely undefined methods and the alternative is hundreds of asserts that can never fire. Reasonable for any codebase that uses `ASN1::map()` heavily.
+2. **Annotate at the call site** with `/** @var Constructed */`. Precise, no runtime cost, but tedious to apply everywhere and easy to let drift out of sync with the map.
+3. **`assert($x instanceof Constructed)`.** Only worth it when the map is genuinely dynamic — chosen at runtime, or supplied by a caller. With a fixed map it's dead weight.
+
+Custom maps you write yourself follow the same rule: a mapping whose top-level `'type'` is `TYPE_SEQUENCE` or `TYPE_SET` yields a `Constructed`; a primitive top-level type yields the corresponding leaf object; `TYPE_CHOICE` yields a `Choice`.
+
 ### `mapChoice`
 
 `map()` handles `ASN1::TYPE_CHOICE` differently because a CHOICE represents "one of these options." It returns a `phpseclib4\File\ASN1\Types\Choice` object — see [Choice](#choice) under the type hierarchy below.
