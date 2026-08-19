@@ -8,6 +8,7 @@ You don't need any of this to write code that uses the high-level classes. Load 
 - You're trying to understand *why* a certificate parses the way it does — what's lazy, what's eager, what `$rules` did at parse time.
 - You want to implement `Signable` on a new type so a `PrivateKey` can sign it directly.
 - You're debugging an `UnexpectedValueException` or `ExcessivelyDeepDataException` from deep inside `ASN1::decodeBER()` and need to know what the parser was trying to do.
+- You're doing forensics on malformed or hostile DER — `enableBlobsOnBadDecodes()`, `MalformedData`, and the limits of both.
 
 ## Contents
 
@@ -222,6 +223,8 @@ public function hasMapping(): bool
 ```
 
 `offsetGet` returns by reference — so `$constructed['child']['grandchild'] = $value` works the way you'd expect on a real array. The reference is to the slot in the decoded `$decoded` array.
+
+`toArray()` (and `__debugInfo()`, which `print_r` uses) renders the *mapped* view, not a faithful transcription of the DER: fields absent from the encoding but carrying a schema default are shown with that default filled in. That's fine for reading well-formed structures, but it means you can't infer "this field was present in the bytes" from its presence in the array. It matters most when debugging malformed input — see [Blobs on bad decodes](#blobs-on-bad-decodes).
 
 ### Autovivification on read
 
@@ -440,6 +443,8 @@ Two sentinel subclasses:
 
 Both subclasses exist purely as type markers — `instanceof ExcessivelyDeepData` / `instanceof MalformedData` lets your code distinguish these from normal `Element` results.
 
+A `MalformedData` blob can only appear where the mapping has a key to put it under. Data that fails to decode but doesn't correspond to any expected field produces no blob at all — see [Blobs on bad decodes](#blobs-on-bad-decodes) for what that means in practice.
+
 ---
 
 ## Cache invalidation and re-encoding
@@ -537,6 +542,129 @@ public static function isBlobsOnBadDecodesEnabled(): bool
 When enabled, decode errors (malformed bytes, excessive depth, schema mismatch) no longer throw — they replace the offending sub-element with a `MalformedData` or `ExcessivelyDeepData` Element and let parsing continue. This lets you load malformed certs to inspect them rather than failing outright.
 
 Off by default (errors throw). Turn on at your own risk; mostly useful for forensic / debugging tools.
+
+#### What blobs mode does *not* do
+
+This is the part that surprises people. Blobs mode is not "show me everything that's wrong with this file." The mental model that predicts its behavior correctly is:
+
+> **The mapper is trying as hard as it can to fit the bytes into the shape it was given. It will never invent a new shape.**
+
+Everything below follows from that.
+
+**1. A blob needs a key to live under.** `MalformedData` is substituted *into the mapped array*, so it only appears where the mapping has a slot for it. If `$x509['tbsCertificate']['subject']` is malformed, that cleanly maps to a field and you get a blob. If the problem is *extra* data with no corresponding field, there's no array key to associate it with and nothing is reported — the data simply doesn't appear in the output.
+
+The degenerate case is an element with no valid tag or length at all, which can't be decoded even as a blob:
+
+```php
+$x509 = new X509();
+$x509['tbsCertificate']['extensions'] = new Element('zzzzzzzzzzzz');
+$x509 = "$x509";
+
+X509::load($x509)->toArray();   // throws UnexpectedValueException
+```
+
+`Element('zzzzzzzzzzzz')` has no valid tag and — more importantly — no valid length, so there is nothing for the parser to delimit.
+
+**2. A schema mismatch can silently truncate the rest of the structure.** If the mapper is looking for a particular tag and the DER has a different one, it doesn't blob the mismatch — it treats the element as not-a-match, and since it can't find what it wants, it stops. Enabling blobs mode does not change this.
+
+Consider a Kerberos `AS-REP` mapped with `crealm` declared as an OCTET STRING when the encoding actually uses GENERALSTRING:
+
+```php
+$KDC_REP = [
+    'type' => ASN1::TYPE_SEQUENCE,
+    'children' => [
+        'pvno'     => ['constant' => 0, 'optional' => true, 'explicit' => true, 'type' => ASN1::TYPE_INTEGER],
+        'msg-type' => ['constant' => 1, 'optional' => true, 'explicit' => true, 'type' => ASN1::TYPE_INTEGER],
+        'padata'   => ['constant' => 2, 'optional' => true, 'explicit' => true,
+                       'min' => 0, 'max' => -1,
+                       'type' => ASN1::TYPE_SEQUENCE, 'children' => $PA_DATA],
+        'crealm'   => ['constant' => 3, 'optional' => true, 'explicit' => true,
+                       'type' => ASN1::TYPE_OCTET_STRING],   // <-- wrong; DER has GENERALSTRING
+        // ... cname, ticket, enc-part ...
+    ],
+];
+
+ASN1::enableBlobsOnBadDecodes();
+
+$decoded = ASN1::decodeBER($der);
+$result  = ASN1::map($decoded, $AS_REP)->toArray();
+```
+
+The output contains `pvno`, `msg-type` and `padata` — and then nothing. The mapper never finds an OCTET STRING under an explicit `cont [3]`, so it considers `cont [3]` to be extra, stops, and never looks at `cname`, `ticket` or `enc-part`. And because the unmatched `cont [3]` has no key to map to, it isn't reported as a blob either. **A short output is itself the diagnostic signal**: the last field that decoded successfully is adjacent to the mismatch.
+
+**3. `toArray()` / `__debugInfo()` output is not a one-to-one rendering of the DER.** Defaults get filled in. When a field can't be read, the mapper skips ahead looking for something that *does* match, and any field it passed over that has a schema default is populated with that default in the array output:
+
+```php
+$x509 = new X509();
+$x509['tbsCertificate']['version'] = new Element('zzzzzzz');
+$x509 = "$x509";
+
+ASN1::enableBlobsOnBadDecodes();
+
+print_r(X509::load($x509)->toArray());
+```
+
+```
+Array
+(
+    [tbsCertificate] => Array
+        (
+            [version] => phpseclib4\File\ASN1\Types\Integer Object
+                (
+                    [value] => v1
+                )
+
+            [serialNumber] => phpseclib4\File\ASN1\MalformedData Object
+                (
+                    [value] => 7a7a7a7a7a7a7a
+                )
+
+            [signature] => phpseclib4\File\ASN1\MalformedData Object
+                (
+                    [value] => 3432343739353034343130353433323936313635303730363730303832...
+                )
+
+            [issuer] => phpseclib4\File\ASN1\MalformedData Object
+                (
+                    [value] => 060100
+                )
+
+            [validity] => Array
+                (
+                )
+            ...
+        )
+    ...
+)
+```
+
+`version` reads as `v1` even though it was set to `zzzzzzz`: the mapper couldn't read it, moved on until it found a matching element, and then filled the slot with the schema default. Note also that the corruption *shifts* the remaining fields — the `7a7a…` bytes surface under `serialNumber`, not under `version`. Blobs tell you roughly where things went wrong, not precisely which field was corrupted.
+
+The general point: `toArray()` / `__debugInfo()` could have hidden absent-but-defaulted fields and applied defaults only internally, but it doesn't — it writes them into the array output. Do not read a value out of `toArray()` and conclude it was present in the underlying DER.
+
+**4. Blobs are one tool, not the whole toolkit.** Pair them with an independent structural dump. `openssl asn1parse` is the usual second opinion — it decodes tags and lengths without any schema, so where it works it shows you what's actually there rather than what the mapping hoped for:
+
+```
+openssl asn1parse -in test.pem -inform DER
+```
+
+For the Kerberos case above, the way to find the bug is to look for `cont [3]` at depth 2 in that output and read off its actual type:
+
+```
+   67:d=2  hl=2 l=  15 cons: cont [ 3 ]
+   69:d=3  hl=2 l=  13 prim: GENERALSTRING
+```
+
+— which immediately shows the field is a GENERALSTRING, not the OCTET STRING the map declared.
+
+**The two tools cover different failure modes, and the split follows from where each one sits in the pipeline.** OpenSSL, like phpseclib, decodes in two passes: first the ASN.1 tag/length structure, then the mapping of that structure onto X.509 (or whatever the target schema is). `asn1parse` exposes only the first pass.
+
+That gives you a rough division of labor:
+
+- **The ASN.1 decode itself fails** (bad tags, bogus lengths, truncated elements) — `asn1parse` has nothing to show you either, since it's the same pass that's failing. It will typically error out or stop at the bad element. This is where `MalformedData` earns its keep: phpseclib keeps going and hands you the surrounding structure plus the raw bytes of the part that didn't decode.
+- **The ASN.1 decodes cleanly but doesn't fit the schema** (wrong type, missing required field, unexpected tag) — `asn1parse` is likely the easier tool, because the structure it prints is complete and correct; you just compare it against what the map expects. This is also precisely the case where blobs mode is least informative, per limitation 2 above.
+
+`Constructed::currentlyDecoded()` is the in-process equivalent for the laziness question ("how far did it actually get?"), and a schema-less `ASN1::decodeBER()` followed by `toArray()` gives you phpseclib's own view of the raw tag structure without a mapping imposed on it — the closest analogue to `asn1parse` without leaving PHP, and worth reaching for when you want the two passes separated but the file won't survive a round trip to disk.
 
 ---
 
