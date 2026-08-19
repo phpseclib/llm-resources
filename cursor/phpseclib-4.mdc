@@ -124,7 +124,7 @@ $pfx = PFX::load($bytes, 'password');
 $pfx->sign($x509);   // signs as a CA, copies issuer DN + AKI
 ```
 
-Encrypted PFX without password throws `phpseclib4\Exception\PasswordNeededException`. phpseclib's default password is the empty string; a truly passwordless PFX (`removePassword()`, or no password at all) has no MAC — the MAC key is derived from the password — and no encryption. Such files are not widely supported: OpenSSL/LibreSSL won't load a MAC-less PFX without `-nomacver`, and .NET's cert loader fails on Linux/macOS. Fine for dev/testing, rarely otherwise ([OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html), [.NET issue](https://github.com/dotnet/runtime/issues/18254)).
+Encrypted PFX without password throws `phpseclib4\Exception\PasswordNeededException`, but only after phpseclib tries `null` then the empty string — so empty-password files open unaided. The empty string is the default password (`new PFX()` starts there); only an explicit `removePassword()` / `setPassword(null)` / bare `setPassword()` gives a truly passwordless PFX, which has no encryption and no MAC (the MAC key derives from the password). Many tools reject those: KeyStore Explorer 5.6.1 won't open one, OpenSSL/LibreSSL historically needed `-nomacver` (3.x now just warns), .NET's cert loader has failed on Linux/macOS. Empty-string password → encrypted and MAC'd, which those tools accept; that's why it's the default. Dev/testing only ([OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html), [.NET issue](https://github.com/dotnet/runtime/issues/18254)).
 
 ### CMS — new in 4.0
 

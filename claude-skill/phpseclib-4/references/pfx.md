@@ -44,7 +44,11 @@ Typical contents:
 - **Just one or more certificates, no keys.** Less common but valid — for bundling a trust store, for example.
 - **Just one or more private keys, no certs.** Possible but rare.
 
-The password protects the file in two ways: it derives an HMAC key (which signs the contents to detect tampering), and it derives an encryption key (which encrypts the private keys, and optionally the certificates too). A PFX without a password has no integrity protection and no encryption — useful for development/testing but rare in production.
+The password protects the file in two ways: it derives an HMAC key (which signs the contents to detect tampering), and it derives an encryption key (which encrypts the private keys, and optionally the certificates too). A PFX with *no* password therefore has neither — no MAC and no encryption.
+
+That matters more than it might sound, because plenty of software won't touch a passwordless PFX at all. KeyStore Explorer 5.6.1 — an otherwise capable, widely used GUI for exactly this format — simply fails to open one. If a tool built specifically for keystores balks, it's reasonable to assume less specialized consumers will too. OpenSSL and LibreSSL historically refused without `-nomacver`, though OpenSSL 3.x has softened to a `Warning: MAC is absent!` and proceeds; .NET's certificate loader has failed on these on Linux and macOS.
+
+This is why phpseclib treats the **empty string as the default password** rather than treating "no password given" as "no password at all." When a user asks other tooling for a "passwordless" PFX, an empty-string password is generally what they actually get — so that's the safer default to match. A new `PFX` object starts with `''`; you have to explicitly call `removePassword()` to get the genuinely password-free variant, and you should expect interoperability problems when you do. See [Passwords and encryption](#passwords-and-encryption) for the full state table.
 
 phpseclib's `PFX` class models this as a structured collection. You build a PFX by `add()`-ing X509 and PrivateKey objects with optional metadata; you read one by `load()`-ing the file with the password and then querying it via selectors and bulk getters.
 
@@ -65,7 +69,15 @@ use phpseclib4\File\PFX;
 $pfx = PFX::load(file_get_contents('keystore.pfx'), 'my-password');
 ```
 
-The second argument is the password. Pass `null` (or omit) for an unencrypted PFX. If the file is encrypted and no password is supplied, `phpseclib4\Exception\PasswordNeededException` is thrown.
+The second argument is the password. Omitting it doesn't commit you to a single interpretation: `load()` tries `null` first and falls back to the empty string if that fails, so a PFX encrypted with an empty password opens without your having to know that in advance. Only when both fail does `phpseclib4\Exception\PasswordNeededException` come out.
+
+```php
+$a = new PFX();                    // starts at '' — exports encrypted
+$b = PFX::load($bytes);            // null, then '' — opens either kind
+$c = PFX::load($bytes, '');        // '' only
+```
+
+Passing `''` explicitly is still worth doing when you know that's the password — it skips the failed first attempt and makes the intent legible to whoever reads the code next.
 
 The `PasswordNeededException` is distinct from `BadDecryptionException`, which is what you get for a wrong password. So:
 
@@ -138,6 +150,16 @@ echo $prodPfx;  // outputs a new PFX containing just those objects
 
 `pluckBy*` returns a flat array of objects; `pfxFrom*` wraps them in a new `PFX` instance. Use the array form for inspection or single-use signing; use the PFX form when you need to re-export or pass the subset to something that takes a PFX.
 
+The sub-PFX inherits the parent's password, so a subset extracted from an encrypted PFX re-exports encrypted with the same password. It does *not* inherit bag metadata: `pfxFrom*` re-`add()`s each object with no `friendlyName` or `localKeyID`, so the labels you selected on won't survive into the copy. If the subset needs to keep its labels, rebuild it by hand:
+
+```php
+$sub = new PFX();
+$sub->setPassword($password);
+foreach ($pfx->pluckByFriendlyName('production') as $obj) {
+    $sub->add($obj, 'production', $keyId);
+}
+```
+
 Both forms accept `string` or any `BaseString` instance for the value. Friendly names are conventionally UTF-8 strings; local key IDs are conventionally raw bytes — use whichever your PFX was built with.
 
 ---
@@ -148,7 +170,7 @@ Both forms accept `string` or any `BaseString` instance for the value. Friendly 
 public function __construct()
 ```
 
-The constructor takes no arguments. A new PFX is empty.
+The constructor takes no arguments. A new PFX is empty — but not password-free: it starts with the empty-string password, so an untouched `new PFX()` still exports as an encrypted PFX.
 
 ```php
 use phpseclib4\Crypt\EC;
@@ -158,15 +180,23 @@ $priv = EC::createKey('Ed25519');
 $x509 = /* ... build a cert signed by something ... */;
 
 $pfx = new PFX();
-$pfx->setPassword('my-password');     // encrypt on export
+$pfx->setPassword('my-password');     // choose the password before adding
 $pfx->add($x509);
 $pfx->add($priv);
 echo $pfx;
 ```
 
 The order of operations matters slightly:
-- Call `setPassword()` *before* `add()` if you want the resulting PFX to be encrypted. `add()` checks the current password state and bags-types things accordingly (a private key goes into a `PKCS8ShroudedKeyBag` when there's a password, a plain `KeyBag` otherwise).
-- You can call `setPassword()` after `add()` too — it'll re-bag everything into the appropriate types. But the operation is more work and easier to get wrong.
+- Call `setPassword()` *before* `add()`. `add()` reads the current password state and bag-types things accordingly: a private key goes into a `PKCS8ShroudedKeyBag` when a password is set (including when it's the default `''`) and a plain `KeyBag` only when the password is `null`; certificates go into an `id-encryptedData` content or a plain `id-data` content on the same test.
+- You can call `setPassword()` after `add()` too — it re-bags everything into the appropriate types. Changing one non-null password for another is cheap (it just re-wraps the shrouded key bags). Going from `null` to a real password is the expensive path: cert bags have to be pulled out and re-added into encrypted containers, and their `friendlyName` / `localKeyID` attributes are carried across by hand.
+- To build a genuinely passwordless PFX, call `removePassword()` on the fresh object *before* adding anything. Skipping `setPassword()` does not get you there — it gets you the empty-string password. Expect consumers to reject the result; this is for tests and local debugging.
+
+```php
+$pfx = new PFX();
+$pfx->removePassword();      // now KeyBag / id-data, no MAC
+$pfx->add($priv);
+$pfx->add($x509);
+```
 
 ---
 
@@ -210,9 +240,19 @@ public function setPassword(?string $password = null): void
 public function removePassword(): void
 ```
 
-`setPassword()` sets the password used for both encryption (of private keys; optionally of cert bags) and HMAC integrity. Subsequent `toString()` / `echo` calls produce an encrypted PFX.
+There are three states, not two, and the difference between the last two is the part that trips people up:
 
-`removePassword()` (or `setPassword(null)`) strips encryption entirely — private keys come out unencrypted, no HMAC. The next export will be a plain PFX. Use this sparingly; an unencrypted PFX is usually not what you want.
+| State | How you get it | Key bags | Cert bags | MAC |
+|---|---|---|---|---|
+| Real password | `setPassword('hunter2')` | `PKCS8ShroudedKeyBag` | `id-encryptedData` | yes |
+| Empty password (**default**) | `new PFX()`, `setPassword('')` | `PKCS8ShroudedKeyBag` | `id-encryptedData` | yes |
+| No password | `removePassword()`, `setPassword(null)`, `setPassword()` | `KeyBag` | `id-data` | no |
+
+The MAC is keyed off whether a password is *set*, not whether it's non-empty — so the empty-string default still produces a MAC'd file, matching what OpenSSL does with an empty `-passout`. Only the third row is genuinely unprotected.
+
+`setPassword()` sets the password used for both encryption (of private keys; optionally of cert bags) and MAC integrity. Subsequent `toString()` / `echo` calls produce an encrypted PFX.
+
+`removePassword()` strips encryption entirely — private keys come out unencrypted, cert contents move back to `id-data`, and any existing `macData` is dropped. Note that `setPassword(null)` and a bare `setPassword()` are *the same thing*: the method delegates straight to `removePassword()` when its argument isn't set. If you meant "empty password," you have to write `setPassword('')` explicitly; `setPassword()` gets you the third row.
 
 Changing the password on a loaded PFX:
 
@@ -237,7 +277,7 @@ public static function setSaltLength(int $length): void
 These are process-wide defaults that apply when phpseclib *encrypts* a PFX. They don't affect decryption — when reading a PFX, phpseclib uses whatever parameters the file was encrypted with.
 
 - **`setHashAlgorithm()`** — hash used by PBKDF2 and HMAC. Default is `'sha256'`. Older PFXs you want to interoperate with may need `'sha1'`.
-- **`setIterationCount()`** — PBKDF2 iteration count. Higher = more resistant to brute-force, slower to encrypt/decrypt. RFC 7292 § 6 recommends 1024 or more; modern guidance is 100,000+. Legacy PFXs often use 2,048.
+- **`setIterationCount()`** — PBKDF2 iteration count. Default is 2,048, matching OpenSSL. Higher = more resistant to brute-force, slower to encrypt/decrypt. RFC 7292 § 6 recommends 1024 or more; modern guidance is 100,000+.
 - **`setSaltLength()`** — length in bytes of the random PBKDF2 salt. Default is 32 bytes. RFC 7292 recommends matching the hash output length.
 
 Call these once at startup if you want non-default values; the PFX you produce next will use them.

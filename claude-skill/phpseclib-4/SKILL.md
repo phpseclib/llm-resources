@@ -225,7 +225,7 @@ $pfx->add($privateKey);
 $pfx->add($x509);
 $pfx->add($x509, friendlyName: 'whatever');         // PHP 8 named args
 $pfx->add($x509, localKeyID: 'some-id');
-$pfx->setPassword('password');                       // or removePassword()
+$pfx->setPassword('password');                       // default is '', not null
 echo $pfx;                                           // binary DER
 
 // Reading:
@@ -238,9 +238,9 @@ $pfx->getAll();            // both, in order
 $pfx->sign($x509);   // copies issuer DN + authorityKeyIdentifier from PFX's CA cert
 ```
 
-If you `PFX::load()` an encrypted PFX without a password, expect `phpseclib4\Exception\PasswordNeededException`.
+If you `PFX::load()` an encrypted PFX without a password, expect `phpseclib4\Exception\PasswordNeededException` — but only after phpseclib has tried both `null` and the empty string, so an empty-password PFX opens without you having to specify that.
 
-`setPassword('')` (empty string) is phpseclib's default when no password is given. A truly passwordless PFX — from `removePassword()`, or created/loaded with no password — has no [MAC](https://en.wikipedia.org/wiki/Message_authentication_code) (the integrity MAC's key is derived from the password, so no password means no MAC) and no encryption. Such files are not widely supported by other software: OpenSSL and LibreSSL refuse to load a MAC-less PFX unless you pass `-nomacver`, and .NET's certificate loader fails on Linux/macOS. Fine for dev/testing, rarely what you want otherwise. See [this Feb 2022 OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html) and [this Aug 2016 .NET issue](https://github.com/dotnet/runtime/issues/18254).
+The empty string, not `null`, is phpseclib's default password: `new PFX()` starts there, and only an explicit `removePassword()` (equivalently `setPassword(null)` or a bare `setPassword()`) gets you a truly passwordless file. That distinction is the one to keep straight, because the passwordless variant has no encryption and no [MAC](https://en.wikipedia.org/wiki/Message_authentication_code) — the MAC key is derived from the password — and a lot of software simply won't open it. KeyStore Explorer 5.6.1, a GUI built specifically for keystores, fails on them outright; OpenSSL and LibreSSL historically refused without `-nomacver` (OpenSSL 3.x now warns `MAC is absent!` and proceeds); .NET's certificate loader has failed on Linux/macOS. An empty-string password, by contrast, produces an encrypted and MAC'd file that these tools accept — which is exactly why it's the default. Reach for `removePassword()` in tests, not in anything you hand to someone else. See [this Feb 2022 OpenSSL thread](https://mta.openssl.org/pipermail/openssl-users/2022-February/014901.html) and [this Aug 2016 .NET issue](https://github.com/dotnet/runtime/issues/18254).
 
 ### 7. CMS (Cryptographic Message Syntax) — new in 4.0
 
