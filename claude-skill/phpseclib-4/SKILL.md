@@ -386,6 +386,20 @@ Four methods are gone:
 
 When migrating, treat any 3.0 call to `getErrors`/`getLastError`/`getSFTPErrors`/`getLastSFTPError` as a flag that the surrounding logic is built around polling for errors. Rewrite it around `try`/`catch` for normal operations, and only use `SFTP::getErrors()` for recursive operations where partial failure is expected.
 
+### Key re-exchange interval renamed
+
+`SSH2::bytesUntilKeyReexchange()` is `SSH2::setBytesUntilKeyReexchange()` in 4.0 — same behavior (how many bytes may be transferred before phpseclib triggers a key re-exchange; default 1 GB), renamed to match the `set*` convention of the other SSH2 configuration methods. Signature: `public function setBytesUntilKeyReexchange(int $bytes): void`.
+
+```php
+// 3.0
+$ssh->bytesUntilKeyReexchange(1024 * 1024 * 100);
+
+// 4.0
+$ssh->setBytesUntilKeyReexchange(1024 * 1024 * 100);
+```
+
+A stale call throws `Error: Call to undefined method`. That's loud, but re-exchange tuning usually lives on a rarely-exercised configuration path, so grep for `bytesUntilKeyReexchange(` during a migration rather than relying on tests to catch it.
+
 ### Engine selection (test hooks only)
 
 The `useBestEngine()` / `useInternalEngine()` / `getEngine()` methods were renamed to `forceEngine()` / `getForcedEngine()` to make their behavior clearer. This rename was backported to phpseclib 3.0.51, so anyone on a current point release of 3.0 already has the new names — it is not actually a 4.0-specific BC break. The methods are also almost exclusively used by phpseclib's own unit tests to exercise each backend (libsodium / OpenSSL / pure-PHP) side by side. Application code very rarely needs them. If a user is hitting this in migrated code, ask whether they actually need to pin a backend or whether the call can simply be removed.

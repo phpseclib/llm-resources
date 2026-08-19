@@ -380,6 +380,14 @@ Only `chmod` swapped — `chown`, `chgrp`, `touch`, `truncate`, `put`, `get` wer
 
 (3.0's `getSFTPErrors()` output was bare status strings with no operation or path context.)
 
+### Renamed methods
+
+| 3.0 | 4.0 |
+| --- | --- |
+| `$ssh->bytesUntilKeyReexchange($bytes)` | `$ssh->setBytesUntilKeyReexchange($bytes)` |
+
+Same behavior — bytes transferred before a key re-exchange is triggered (default 1 GB). Renamed for consistency with the other `set*` configuration methods. 4.0 signature: `setBytesUntilKeyReexchange(int $bytes): void`. A stale call throws `Error: Call to undefined method`.
+
 ---
 
 ## Migration patterns

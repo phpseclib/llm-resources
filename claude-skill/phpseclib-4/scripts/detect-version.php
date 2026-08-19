@@ -220,6 +220,17 @@ $patterns = [
         'suggestion' => 'Rewrite around try/catch. All SSH2 errors are now thrown.',
     ],
     [
+        // The 3.0 name for the key re-exchange threshold setter. `->` immediately
+        // precedes the method name, so the 4.0 `->setBytesUntilKeyReexchange(`
+        // cannot match. /i because PHP method names are case-insensitive.
+        'regex' => '/->\s*bytesUntilKeyReexchange\s*\(/i',
+        'version' => '3.0',
+        'category' => 'removed-api',
+        'severity' => 'error',
+        'message' => 'bytesUntilKeyReexchange() — renamed in 4.0',
+        'suggestion' => 'Rename to `setBytesUntilKeyReexchange($bytes)`. Same behavior (bytes transferred before a key re-exchange, default 1 GB); the old name throws Error: Call to undefined method.',
+    ],
+    [
         // The Random::string() call. Excluded: `use phpseclib3\Crypt\Random;` lines
         // (those are already caught by the namespace import pattern).
         'regex' => '/\bRandom::\s*string\s*\(/',

@@ -762,9 +762,19 @@ try {
 }
 ```
 
+### Renamed: `bytesUntilKeyReexchange()` → `setBytesUntilKeyReexchange()`
+
+| 3.0 | 4.0 |
+| --- | --- |
+| `$ssh->bytesUntilKeyReexchange($bytes)` | `$ssh->setBytesUntilKeyReexchange($bytes)` |
+
+Behavior is identical — it sets how many bytes may be transferred before phpseclib initiates a key re-exchange (default: 1 GB). Only the name changed, to match the `set*` convention used by the other SSH2 configuration methods. The 4.0 signature is `public function setBytesUntilKeyReexchange(int $bytes): void`.
+
+The 3.0 name no longer exists, so a stale call fails with `Error: Call to undefined method phpseclib4\Net\SSH2::bytesUntilKeyReexchange()` at the point of the call — a loud failure, but only on the code path that configures re-exchange, which is often a rarely-exercised one. Grep for `bytesUntilKeyReexchange(` during a migration rather than waiting for it to surface.
+
 ### Other SSH2/SFTP changes
 
-The high-level connect/login/exec/put/get pattern is unchanged. Connection lifecycle, authentication methods, channel management, port forwarding, host key verification, and key exchange algorithm selection all carried over from 3.0 without API changes — only the surrounding error-handling style changed (exceptions instead of `false` returns).
+The high-level connect/login/exec/put/get pattern is unchanged. Connection lifecycle, authentication methods, channel management, port forwarding, host key verification, and key exchange algorithm selection all carried over from 3.0 without API changes — apart from the `setBytesUntilKeyReexchange()` rename above, only the surrounding error-handling style changed (exceptions instead of `false` returns).
 
 ---
 
