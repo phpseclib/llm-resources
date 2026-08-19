@@ -17,7 +17,7 @@ The resources in this repo close that gap. They give your AI assistant the same 
 | **Claude** (claude.ai, desktop, mobile) | [`claude-skill/phpseclib-4/`](claude-skill/phpseclib-4/) | Download the folder as a `.zip` and upload it under Settings → Capabilities → Skills |
 | **Claude Code** | [`claude-skill/phpseclib-4/`](claude-skill/phpseclib-4/) | Copy the folder into `~/.claude/skills/` |
 | **ChatGPT, Gemini, anything else** | [`portable/phpseclib-4-for-llms.md`](portable/phpseclib-4-for-llms.md) | Paste into the system prompt, attach as a file, or include in a custom GPT's instructions |
-| **Cursor** | [`cursor/phpseclib-4.mdc`](cursor/) | _Coming soon_ — drop into `.cursor/rules/` once published |
+| **Cursor** | [`cursor/phpseclib-4.mdc`](cursor/) | Drop into `.cursor/rules/` once published |
 
 After installing, just write naturally — "help me convert this phpseclib 3 code to 4," "show me how to sign a CSR with phpseclib 4," "why is `$sftp->chmod(0777, 'file')` throwing a TypeError?" — and the assistant will pull in the right context automatically.
 
