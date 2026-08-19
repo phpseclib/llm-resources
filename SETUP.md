@@ -275,7 +275,7 @@ This is the single most common LLM mistake on phpseclib 4.0, because every model
 
 This isn't a skill problem — it's a Composer dependency conflict. Most likely you have a third-party package that requires `phpseclib/phpseclib:~3.0` (Google's PHP API client is the common one). Solutions:
 
-- **Use the compat shim:** `composer require phpseclib/phpseclib3_compat`. This satisfies the 3.0 requirement while running on 4.0 underneath. Your existing 3.0-style code keeps working unchanged.
+- **Use the compat shim:** `composer require phpseclib/phpseclib3_compat`. This will satisfy the 3.0 requirement while running on 4.0 underneath. Your existing 3.0-style code keeps working unchanged.
 - **Wait for the third-party package to update.** Some maintainers will bump their phpseclib requirement to allow 4.0 once it's stable.
 - **Fork or patch the third-party package's `composer.json`** to allow 4.0 (only safe if you've checked that the package's actual usage works against 4.0).
 

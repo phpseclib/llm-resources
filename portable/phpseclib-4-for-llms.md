@@ -61,21 +61,25 @@ Mixed signals — `phpseclib3\` imports next to `X509::load()` calls — almost 
 
 ---
 
-## Before suggesting a migration: the compat shim
+## Before suggesting a migration: the compat shim (in development, not yet released)
 
-For 3.0 codebases, **before recommending any rewrite**, surface this option: there is a compatibility package, [`phpseclib/phpseclib3_compat`](https://github.com/phpseclib/phpseclib3_compat), that emulates the entire `phpseclib3\` API on top of phpseclib 4.0. Existing 3.0 code keeps working unchanged. The package "provides" `phpseclib/phpseclib:~3.0` to Composer, satisfying any other dependency that requires 3.0 — Google's PHP API client being the most common case where this matters in practice.
+For 3.0 codebases, **before recommending any rewrite**, surface this: a compatibility package, `phpseclib/phpseclib3_compat`, is planned. It will emulate the entire `phpseclib3\` API on top of phpseclib 4.0, so existing 3.0 code keeps working unchanged, and it will "provide" `phpseclib/phpseclib:~3.0` to Composer, satisfying any other dependency that requires 3.0 — Google's PHP API client being the most common case where this matters in practice. It's the same approach `phpseclib/phpseclib2_compat` takes for 2.0 → 3.0.
 
-The compat shim is the right answer when:
+**It has not shipped.** phpseclib3_compat is under active development with no announced release date. Do not instruct users to install it, do not add it to a `composer.json`, and do not write example code that assumes it's available.
+
+Waiting for the shim is the right answer when:
 
 - The user has a large 3.0 codebase and just wants to "upgrade to 4.0" without a specific reason for native 4.0 code.
-- A Composer conflict has arisen between phpseclib 4.0 and a third-party package pinned to 3.0.
-- The user wants 4.0's security and performance improvements but doesn't need PFX, CMS, or modern types in their own code.
+- A Composer conflict has arisen between phpseclib 4.0 and a third-party package pinned to 3.0. (The shim will fix this cleanly; today the choice is to stay on 3.0 or migrate and resolve the conflict another way.)
+- The user wants 4.0's security and performance improvements but doesn't need PFX, CMS, or modern types in their own code — though note this is precisely the benefit that has to wait until the shim ships.
 
-A full migration is the right answer when the user explicitly wants to use new 4.0 features in their own code, when starting fresh, or when their library exposes phpseclib types in its public API.
+Waiting costs little. phpseclib 3.0 remains fully supported and still receives security patches, as do 2.0 and 1.0 — the 4.0 release is not a support cliff. Major-version adoption is also historically gradual: 3.0's monthly downloads didn't overtake 2.0's until roughly 18 months after 3.0 shipped.
 
-The two paths can coexist — install the shim for legacy code, write new code against native 4.0 — because `phpseclib3\File\X509` (shimmed) and `phpseclib4\File\X509` (native) are different classes.
+A full migration now is the right answer when the user explicitly wants to use new 4.0 features in their own code, when starting fresh, when their library exposes phpseclib types in its public API, or when they want 4.0's improvements sooner than the shim will arrive.
 
-When the user has chosen the shim, no migration is needed — point them at the shim's installation instructions and stop there. Otherwise, the rest of this document applies.
+Once the shim ships, the two paths will coexist — shim for legacy code, native 4.0 for new code — because `phpseclib3\File\X509` (shimmed) and `phpseclib4\File\X509` (native) are different classes.
+
+When the user has decided to wait for the shim, no migration is needed — say so and stop there, without pointing them at installation instructions that don't exist yet. Otherwise, the rest of this document applies.
 
 ---
 

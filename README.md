@@ -53,7 +53,7 @@ A few things worth being explicit about:
 | phpseclib 3.0 | Recognized; used as the migration source |
 | phpseclib 2.0 and 1.0 | Recognized for version detection only — get the code onto a current 3.0 release first, then to 4.0 from there |
 
-**You may not need to migrate.** [`phpseclib/phpseclib3_compat`](https://github.com/phpseclib/phpseclib3_compat) emulates the entire `phpseclib3\` API on top of phpseclib 4.0, so existing 3.0 code can keep working while the underlying library is upgraded. It also "provides" `phpseclib/phpseclib:~3.0` to Composer, which means it satisfies dependencies that pin to 3.0 (Google's PHP API client, for example). For many projects — especially ones with substantial X.509 code — installing the compat shim is faster, safer, and just as functional as a full rewrite. The skill, the Cursor rule, and the portable guide all surface this option before recommending a migration.
+**You may not need to migrate.** [`phpseclib/phpseclib3_compat`](https://github.com/phpseclib/phpseclib3_compat) will emulate the entire `phpseclib3\` API on top of phpseclib 4.0, so existing 3.0 code can keep working while the underlying library is upgraded. It also "provides" `phpseclib/phpseclib:~3.0` to Composer, which means it satisfies dependencies that pin to 3.0 (Google's PHP API client, for example). For many projects — especially ones with substantial X.509 code — installing the compat shim is faster, safer, and just as functional as a full rewrite. The skill, the Cursor rule, and the portable guide all surface this option before recommending a migration.
 
 ## What version of phpseclib 4 this targets
 

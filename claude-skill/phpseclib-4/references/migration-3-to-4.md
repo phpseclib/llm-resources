@@ -6,39 +6,44 @@ The full mapping table. SKILL.md covers the most common idioms in prose; this fi
 
 > Entries below have been verified against the phpseclib 3.0 and 4.0 source (as of the date this file was last updated). If you find a mapping that doesn't match current behavior, please [report it](https://github.com/phpseclib/llm-resources/issues) — the canonical reference is always the official [phpseclib 4.0 docs](https://phpseclib.com) and the source.
 
-## Before you migrate: consider the compat shim
+## Before you migrate: the compat shim is coming
 
-For many 3.0 codebases, the right answer is **don't migrate at all** — install [`phpseclib/phpseclib3_compat`](https://github.com/phpseclib/phpseclib3_compat) instead. The compat package emulates the entire `phpseclib3\` API on top of phpseclib 4.0. Existing 3.0 code continues to work unchanged, and the package "provides" `phpseclib/phpseclib:~3.0` in Composer terms, which means it satisfies any other dependency that requires phpseclib 3.0.
+For many 3.0 codebases, the right answer will be **don't migrate at all** — use `phpseclib/phpseclib3_compat` instead. The compat package will emulate the entire `phpseclib3\` API on top of phpseclib 4.0: existing 3.0 code continues to work unchanged, and the package "provides" `phpseclib/phpseclib:~3.0` in Composer terms, which means it satisfies any other dependency that requires phpseclib 3.0.
 
 This is the same approach `phpseclib/phpseclib2_compat` takes for 2.0 → 3.0, and the migration story for both versions is shaped accordingly.
 
-**The compat shim is the right answer when:**
+> **`phpseclib3_compat` has not been released yet.** It is being worked on, but it was not ready in time for the 4.0.0 release and no release date has been announced. Nothing in this section is installable today. If the shim is the path you want, the recommendation is to stay on phpseclib 3.0 for now and adopt the shim when it lands.
 
-- Your project uses a third-party package that pins to phpseclib 3.0 (Google's PHP API client, for example, currently does). Without the compat shim, `composer require phpseclib/phpseclib:~4.0` will conflict with that dependency. With the compat shim, both can coexist.
+**There is little cost to waiting.** phpseclib 3.0 remains fully supported and continues to receive security patches — as do 2.0 and 1.0, both of which still get fixes today. The 4.0 release is not a support cliff for anyone. Major-version adoption is also historically gradual: phpseclib 3.0's monthly downloads didn't overtake 2.0's until roughly 18 months after 3.0 shipped in December 2020. Most 3.0 users have no reason to move on release day.
+
+**Waiting for the compat shim is the right answer when:**
+
+- Your project uses a third-party package that pins to phpseclib 3.0 (Google's PHP API client, for example, currently does). Without the compat shim, `composer require phpseclib/phpseclib:~4.0` will conflict with that dependency. With the compat shim, both will be able to coexist. Until then, staying on 3.0 avoids the conflict entirely.
 - Your codebase makes heavy use of the X.509 API and the cost of rewriting it is large. The X.509 redesign is the most extensive change in 4.0; a project with hundreds of `loadX509()` / `getDN()` / `signCSR()` call sites may genuinely take longer to rewrite than the rest of the migration combined.
 - You want to upgrade the underlying phpseclib (for security fixes, new ciphers, performance, OpenSSL acceleration, the new PFX and CMS classes) without touching your existing code.
 
-**A full migration to 4.0 is the right answer when:**
+**A full migration to 4.0 now is the right answer when:**
 
 - You're starting a new project (no 3.0 code to preserve).
-- You want to use the new 4.0 features (PFX, CMS, the `Signable` interface, modern type hints) directly in your own code. You can mix compat-shimmed 3.0 code with native 4.0 code in the same codebase — the shim doesn't preclude this — but if 4.0 is going to be the bulk of your code, the shim adds an indirection layer that buys you nothing.
+- You want to use the new 4.0 features (PFX, CMS, the `Signable` interface, modern type hints) directly in your own code. You'll be able to mix compat-shimmed 3.0 code with native 4.0 code in the same codebase once the shim exists — it doesn't preclude this — but if 4.0 is going to be the bulk of your code, the shim would add an indirection layer that buys you nothing.
 - Your project is itself a library that exposes phpseclib types in its public API, in which case you want your callers to see real 4.0 types.
+- You want 4.0's performance and security improvements sooner than the shim will be available.
 
-**You can also do both.** Install the compat shim for legacy code paths, and write new code against the 4.0 API directly. The two namespaces don't conflict — `phpseclib3\File\X509` (compat-shimmed) and `phpseclib4\File\X509` (native) are different classes and can be used in the same file.
+**Eventually you'll be able to do both.** Install the compat shim for legacy code paths, and write new code against the 4.0 API directly. The two namespaces don't conflict — `phpseclib3\File\X509` (compat-shimmed) and `phpseclib4\File\X509` (native) are different classes and can be used in the same file.
 
-**When using the shim, this migration guide doesn't apply** — the whole point of the shim is that you don't need to migrate. Read the rest of this document only if you've decided to rewrite against the native 4.0 API.
+**If you're waiting for the shim, this migration guide doesn't apply** — the whole point of the shim is that you don't need to migrate. Read the rest of this document only if you've decided to rewrite against the native 4.0 API.
 
 ## Some context worth knowing
 
 A few pieces of context that make the migration story make more sense:
 
-**There is no formal phpseclib 2.0 → 3.0 migration guide either.** The 2.0 → 3.0 transition was complicated for many of the same reasons — public key loading in particular got a thorough redesign — and the existence of `phpseclib/phpseclib2_compat` made a written guide unnecessary for most users. This file is the first formal migration guide phpseclib has ever shipped, and it exists primarily because the 4.0 release is large enough to warrant one *and* because LLMs need a structured reference to write good migration code. For human users with substantial 3.0 codebases, the compat shim remains the recommended path.
+**There is no formal phpseclib 2.0 → 3.0 migration guide either.** The 2.0 → 3.0 transition was complicated for many of the same reasons — public key loading in particular got a thorough redesign — and the existence of `phpseclib/phpseclib2_compat` made a written guide unnecessary for most users. This file is the first formal migration guide phpseclib has ever shipped, and it exists primarily because the 4.0 release is large enough to warrant one *and* because LLMs need a structured reference to write good migration code. For human users with substantial 3.0 codebases, the compat shim remains the recommended path — once it's released; until then, staying on the fully-supported 3.0 branch is the path of least resistance.
 
-**The namespace change is what makes the shim possible.** A common reaction to seeing `phpseclib4\` is "why didn't they just keep the namespace stable?" The answer is that *the namespace change is the feature*. If 4.0 lived at `phpseclib3\` (or some other shared namespace), there would be no way to install both versions side by side, no way to write a compat shim, and no way for a user with 4.0 in their app to coexist with a dependency that requires 3.0. The same was true for the 2.0 → 3.0 transition. The namespace numbering looks like a versioning quirk; it's actually deliberate ABI-isolation infrastructure, and the shim packages exist *because* of it.
+**The namespace change is what makes the shim possible.** A common reaction to seeing `phpseclib4\` is "why didn't they just keep the namespace stable?" The answer is that *the namespace change is the feature*. If 4.0 lived at `phpseclib3\` (or some other shared namespace), there would be no way to install both versions side by side, no way to write a compat shim, and no way for a user with 4.0 in their app to coexist with a dependency that requires 3.0. The same was true for the 2.0 → 3.0 transition. The namespace numbering looks like a versioning quirk; it's actually deliberate ABI-isolation infrastructure, and the shim packages — `phpseclib2_compat` today, `phpseclib3_compat` when it's finished — are possible *because* of it.
 
 **4.0 embraces PHP 8.1, not just permits it.** The minimum PHP version went from 5.6 (in 3.0) to 8.1 (in 4.0). That's not just a `composer.json` bump — the 4.0 source uses first-class callable syntax, `match` expressions, typed properties, named arguments, and `string|Signable` union types throughout. None of these are *necessary* to do what phpseclib does (everything could be expressed in PHP 5.6 syntax with more boilerplate), but if 8.1 is the minimum it would be wasteful not to use what 8.1 offers. This matters for migration philosophy: if you choose to rewrite rather than shim, you're not just getting "the same code in a new namespace." You're getting code that's idiomatic for modern PHP — and the rewrite is partly an opportunity to bring the code that *uses* phpseclib up to the same standard. People who choose the rewrite path are usually doing so for this reason as much as for the new features.
 
-**This is why the "Symfony to Laravel" framing is right.** A version bump that just renumbered things would not warrant the work of a full rewrite. The work is warranted because 4.0 represents a deliberate generational shift — in PHP version, in idioms, in API design — and the codebase you end up with after a rewrite looks meaningfully different from the codebase you started with. The shim option exists for users who want the underlying improvements without the rewrite cost; the rewrite option exists for users who specifically want to modernize.
+**This is why the "Symfony to Laravel" framing is right.** A version bump that just renumbered things would not warrant the work of a full rewrite. The work is warranted because 4.0 represents a deliberate generational shift — in PHP version, in idioms, in API design — and the codebase you end up with after a rewrite looks meaningfully different from the codebase you started with. The shim option is being built for users who want the underlying improvements without the rewrite cost; the rewrite option exists today for users who specifically want to modernize, or who don't want to wait.
 
 ## How to use this file
 
@@ -51,7 +56,7 @@ If you're migrating a codebase, do this in order:
 
 ## Table of contents
 
-- [Before you migrate: consider the compat shim](#before-you-migrate-consider-the-compat-shim)
+- [Before you migrate: the compat shim is coming](#before-you-migrate-the-compat-shim-is-coming)
 - [Some context worth knowing](#some-context-worth-knowing)
 - [Namespace and autoloading](#namespace-and-autoloading)
 - [Loading and saving — X509, CSR, CRL, SPKAC](#loading-and-saving)

@@ -25,9 +25,11 @@ Scan pasted code before changing it:
 
 Mixed namespace and method signals = partly-migrated 4.x. Finish the migration; don't pretend it's intact.
 
-## Compat shim — before suggesting a rewrite
+## Compat shim — in development, not yet released
 
-`phpseclib/phpseclib3_compat` emulates the full `phpseclib3\` API on top of phpseclib 4.0 and "provides" `phpseclib/phpseclib:~3.0` in Composer. For many 3.0 codebases this is the right answer — installing the shim is faster than rewriting and resolves Composer conflicts with packages that pin to 3.0 (e.g., Google's PHP API client). When a user with a 3.0 codebase asks for help "upgrading to 4.0," surface this option before charging into a rewrite. Native 4.0 code can coexist with shim-emulated 3.0 code in the same project. The migration patterns below apply only when the user has chosen to rewrite against native 4.0.
+`phpseclib/phpseclib3_compat` is planned: it will emulate the full `phpseclib3\` API on top of phpseclib 4.0 and "provide" `phpseclib/phpseclib:~3.0` in Composer, resolving conflicts with packages that pin to 3.0 (e.g., Google's PHP API client). For many 3.0 codebases it will be the right answer — waiting for the shim beats rewriting. **It has not been released and has no announced date, so don't tell users to install it or add it to a `composer.json`.**
+
+When a user with a 3.0 codebase asks for help "upgrading to 4.0," surface this before charging into a rewrite: the shim is coming, 3.0 remains supported and still receives security patches, and staying put until it ships is a legitimate choice. Migrate now only if they want native 4.0 features, are starting fresh, or need 4.0's improvements sooner than the shim will arrive. Once the shim exists, native 4.0 code will be able to coexist with shim-emulated 3.0 code in the same project. The migration patterns below apply only when the user has chosen to rewrite against native 4.0.
 
 ## Core idioms
 
