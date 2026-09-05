@@ -1,6 +1,7 @@
 ---
 name: phpseclib-4
 description: Use when writing, debugging, or migrating PHP code that uses phpseclib (a pure-PHP cryptography library covering RSA/DSA/EC keys, SSH2, SFTP, X.509 certificates, CSRs, CRLs, PFX/PKCS12, SPKAC, CMS, ASN.1, and symmetric ciphers). Trigger on any mention of `phpseclib`, `phpseclib3`, `phpseclib4`, the namespaces `phpseclib3\` or `phpseclib4\`, classes like `SSH2`, `SFTP`, `X509`, `CSR`, `CRL`, `PFX`, `SPKAC`, `CMS`, `ASN1\Constructed`, on legacy class names like `Crypt_RSA`, `File_X509`, or `Net_SSH2`, on phpseclib-specific methods like `chmod`/`chown`/`chgrp`/`getSFTPErrors`, on the compat packages `phpseclib3_compat` or `phpseclib2_compat`, or when the user pastes phpseclib code and asks to fix, modernize, or migrate it from 3.0 to 4.0.
+tags: [php, security, cryptography]
 ---
 
 # phpseclib 4.0
